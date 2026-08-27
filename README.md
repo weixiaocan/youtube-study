@@ -39,8 +39,9 @@ YouTube 页面
 在 `host` 目录运行：
 
 ```powershell
-D:\anaconda\python.exe -m unittest test_learning_service.py
-python -m py_compile learning_service.py native_host.py test_learning_service.py
+$PythonExe = "完整 Python 可执行文件路径"
+& $PythonExe -m unittest test_learning_service.py
+& $PythonExe -m py_compile learning_service.py native_host.py test_learning_service.py
 ```
 
 在 `extension` 目录运行：
@@ -58,8 +59,12 @@ node --check sidepanel.js
 `host/native-host-manifest.json` 由 `host/install.ps1` 生成，包含当前机器的绝对路径和 Chrome 扩展 ID，因此不会提交到 Git。新机器安装时运行：
 
 ```powershell
-& ".\host\install.ps1" -ExtensionId "浏览器中显示的扩展 ID"
+& ".\host\install.ps1" `
+  -ExtensionId "浏览器中显示的扩展 ID" `
+  -PythonExe "完整 Python 可执行文件路径"
 ```
+
+安装脚本把 Python 绝对路径写入被 Git 忽略的 `host/python-path.txt`。仓库只保存读取该配置的通用启动脚本，不保存个人机器路径。
 
 ## Git 工作方式
 

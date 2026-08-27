@@ -1,4 +1,5 @@
 @echo off
-set "PYTHON_EXE=D:\anaconda\envs\learn-claude-code\python.exe"
-if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+setlocal
+set "PYTHON_EXE=python"
+if exist "%~dp0python-path.txt" set /p PYTHON_EXE=<"%~dp0python-path.txt"
 "%PYTHON_EXE%" -B "%~dp0native_host.py"

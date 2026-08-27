@@ -1,5 +1,6 @@
 param(
-    [string]$ExtensionId = "edaeogfhcpcmnaniaajnebolodjbmjgk"
+    [string]$ExtensionId = "edaeogfhcpcmnaniaajnebolodjbmjgk",
+    [string]$PythonExe = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,7 +8,18 @@ $ErrorActionPreference = "Stop"
 $hostDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcherPath = (Resolve-Path (Join-Path $hostDir "native_host.bat")).Path
 $manifestPath = Join-Path $hostDir "native-host-manifest.json"
+$pythonPathFile = Join-Path $hostDir "python-path.txt"
 $hostName = "com.lianqian.youtube_study"
+
+if ($PythonExe) {
+    $resolvedPython = (Resolve-Path -LiteralPath $PythonExe).Path
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($pythonPathFile, $resolvedPython, $utf8NoBom)
+} elseif (-not (Test-Path -LiteralPath $pythonPathFile)) {
+    $detectedPython = (Get-Command python -ErrorAction Stop).Source
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($pythonPathFile, $detectedPython, $utf8NoBom)
+}
 
 $manifest = [ordered]@{
     name = $hostName
@@ -31,3 +43,4 @@ foreach ($target in $registryTargets) {
 Write-Host "YouTube Study native host installed."
 Write-Host "Manifest: $manifestPath"
 Write-Host "Allowed extension: $ExtensionId"
+Write-Host "Python: $([System.IO.File]::ReadAllText($pythonPathFile))"

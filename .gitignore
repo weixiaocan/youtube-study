@@ -13,6 +13,7 @@ dist/
 
 # Generated machine-specific Native Messaging registration
 host/native-host-manifest.json
+host/python-path.txt
 
 # Editor and operating-system files
 .DS_Store
