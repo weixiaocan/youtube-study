@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube 学习记录</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <header class="header">
+      <div>
+        <div class="eyebrow">YOUTUBE STUDY</div>
+        <h1 id="video-title">等待 YouTube 视频</h1>
+      </div>
+      <div class="header-actions">
+        <button id="save-to-vault-button" class="primary-button" disabled>保存到知识库</button>
+        <button id="load-transcript-button" class="ghost-button" disabled>获取字幕</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="内容区域">
+      <button class="tab active" data-tab="transcript">字幕</button>
+      <button class="tab" data-tab="records">学习笔记 <span id="record-count">0</span></button>
+    </nav>
+
+    <main>
+      <section id="empty-state" class="empty-state">
+        <div class="empty-icon">▶</div>
+        <p>打开一条带字幕的 YouTube 视频。</p>
+      </section>
+
+      <section id="transcript-panel" class="panel hidden">
+        <div id="transcript-empty" class="transcript-empty hidden">
+          <p>需要字幕时再获取，避免浏览其他 YouTube 视频时自动请求。</p>
+          <button id="load-transcript-cta">获取当前视频字幕</button>
+        </div>
+        <div id="transcript-list" class="transcript-list"></div>
+      </section>
+
+      <section id="records-panel" class="panel hidden">
+        <div id="records-list" class="records-list"></div>
+      </section>
+    </main>
+
+    <section id="composer" class="composer" aria-label="学习记录编辑器">
+      <div class="composer-topline">
+        <span id="draft-time" class="time-chip"></span>
+        <span>保存此刻</span>
+      </div>
+      <blockquote id="draft-text"></blockquote>
+      <textarea id="draft-note" rows="3" placeholder="写下想法或问题，也可以留空……"></textarea>
+      <div class="composer-actions">
+        <span>Enter 保存 · Alt+N 放弃并继续 · Shift+Enter 换行</span>
+        <button id="save-button">保存并继续</button>
+      </div>
+    </section>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube 学习记录",
+  "version": "0.4.0",
+  "description": "在侧边栏同步 YouTube 字幕，并把字幕和时间戳记录保存到一篇 Obsidian 笔记。",
+  "permissions": ["sidePanel", "storage", "tabs", "nativeMessaging", "scripting"],
+  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "打开 YouTube 学习记录"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["bridge.js"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ],
+  "commands": {
+    "save-learning-moment": {
+      "suggested_key": {
+        "default": "Alt+N",
+        "mac": "Alt+N"
+      },
+      "description": "保存当前学习片段"
+    }
+  }
+}

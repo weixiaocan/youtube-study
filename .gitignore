@@ -1,0 +1,20 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+
+# JavaScript dependencies and packaged output
+node_modules/
+dist/
+*.zip
+
+# Generated machine-specific Native Messaging registration
+host/native-host-manifest.json
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,70 @@
+# YouTube Study
+
+一个面向个人学习的 Chrome/Edge 扩展：在 YouTube 侧边栏读取带时间戳的字幕、记录观看时的想法，并由用户明确决定是否保存到 Obsidian。
+
+## 工程结构
+
+```text
+youtube-study/
+├── extension/   # 浏览器端：侧边栏、字幕交互、快捷键和消息编排
+└── host/        # 本机端：Native Messaging、字幕缓存和 Markdown 写入
+```
+
+浏览器扩展不能直接写入任意本地文件，因此两个目录通过 Chrome Native Messaging 协作：
+
+```text
+YouTube 页面
+  -> extension/content.js
+  -> extension/background.js
+  -> chrome.runtime.sendNativeMessage
+  -> host/native_host.py
+  -> host/learning_service.py
+  -> Obsidian Vault
+```
+
+`extension` 和 `host` 是同一个产品的两个模块。它们之间的消息名称及数据结构属于共同接口，修改一端时必须验证另一端，因此放在同一个 Git 仓库中一起版本化和回滚。
+
+## 当前工作流
+
+1. 打开 YouTube 视频不会自动写入知识库。
+2. 点击“获取字幕”只下载并写入 `.claudian/cache/youtube-study` 隐藏缓存。
+3. 使用 `Alt+N` 记录当前时间点的想法；未入库前记录保存在 Chrome 本地存储。
+4. 点击“保存到知识库”后，才创建包含字幕和个人记录的 Markdown。
+5. 已入库的视频继续自动同步新增或删除的观看记录。
+
+详细安装和使用说明见 [`extension/README.md`](extension/README.md)。
+
+## 本地验证
+
+在 `host` 目录运行：
+
+```powershell
+D:\anaconda\python.exe -m unittest test_learning_service.py
+python -m py_compile learning_service.py native_host.py test_learning_service.py
+```
+
+在 `extension` 目录运行：
+
+```powershell
+node --check background.js
+node --check content.js
+node --check sidepanel.js
+```
+
+修改扩展后还需要在 `chrome://extensions` 中点击“重新加载”，刷新 YouTube 页面并进行一次真实视频验证。
+
+## 本机配置
+
+`host/native-host-manifest.json` 由 `host/install.ps1` 生成，包含当前机器的绝对路径和 Chrome 扩展 ID，因此不会提交到 Git。新机器安装时运行：
+
+```powershell
+& ".\host\install.ps1" -ExtensionId "浏览器中显示的扩展 ID"
+```
+
+## Git 工作方式
+
+- `main` 始终保持可以运行。
+- 一个功能或修复对应一个小提交。
+- 提交前运行与改动相关的自动检查，并在 Chrome 中验证真实工作流。
+- 提交信息说明用户可观察到的变化，例如 `feat: add lazy bilingual transcript translation`。
+- 试验性工作使用短生命周期分支，验证后再合并到 `main`。
