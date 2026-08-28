@@ -66,6 +66,12 @@ node --check sidepanel.js
 
 安装脚本把 Python 绝对路径写入被 Git 忽略的 `host/python-path.txt`。仓库只保存读取该配置的通用启动脚本，不保存个人机器路径。
 
+安装后可以用浏览器扩展详情页显示的 ID 检查 Native Messaging 授权：
+
+```powershell
+& ".\host\check_registration.ps1" -ExtensionId "浏览器中显示的扩展 ID"
+```
+
 ## Git 工作方式
 
 - `main` 始终保持可以运行。

@@ -1,5 +1,7 @@
 param(
-    [string]$ExtensionId = "edaeogfhcpcmnaniaajnebolodjbmjgk",
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern("^[a-p]{32}$")]
+    [string]$ExtensionId,
     [string]$PythonExe = ""
 )
 
