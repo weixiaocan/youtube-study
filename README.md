@@ -50,9 +50,13 @@ $PythonExe = "完整 Python 可执行文件路径"
 node --check background.js
 node --check content.js
 node --check sidepanel.js
+node --test ..\\tests\\sidepanel-ui.test.js
 ```
 
 修改扩展后还需要在 `chrome://extensions` 中点击“重新加载”，刷新 YouTube 页面并进行一次真实视频验证。
+
+界面开发时可以在仓库根目录启动静态服务器，再打开
+`extension/sidepanel.html?preview=1` 查看带示例字幕和笔记的安全预览；该参数不会改变扩展正常启动流程。
 
 ## 本机配置
 

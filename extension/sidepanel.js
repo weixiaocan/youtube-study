@@ -5,7 +5,9 @@ const elements = {
   recordsPanel: document.querySelector("#records-panel"),
   transcriptList: document.querySelector("#transcript-list"),
   recordsList: document.querySelector("#records-list"),
+  transcriptCount: document.querySelector("#transcript-count"),
   recordCount: document.querySelector("#record-count"),
+  saveStatus: document.querySelector("#save-status"),
   saveToVaultButton: document.querySelector("#save-to-vault-button"),
   loadTranscriptButton: document.querySelector("#load-transcript-button"),
   loadTranscriptCta: document.querySelector("#load-transcript-cta"),
@@ -24,9 +26,11 @@ let records = [];
 let draft = null;
 let currentTranscriptIndex = -1;
 let activePanel = "transcript";
+const isPreview = new URLSearchParams(window.location.search).has("preview");
 
 setComposerIdle();
-initialize();
+if (isPreview) initializePreview();
+else initialize();
 
 async function initialize() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -44,17 +48,19 @@ async function initialize() {
   }
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === "VIDEO_STATE_READY") {
-    state = message.state;
-    renderState();
-  }
-  if (message.type === "PLAYBACK_TIME" && message.videoId === state?.video?.videoId) {
-    updateCurrentTranscript(message.time);
-  }
-  if (message.type === "DRAFT_READY" && message.tabId === activeTabId) loadDraft();
-  if (message.type === "DRAFT_CANCELLED" && message.tabId === activeTabId) discardDraft();
-});
+if (!isPreview) {
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "VIDEO_STATE_READY") {
+      state = message.state;
+      renderState();
+    }
+    if (message.type === "PLAYBACK_TIME" && message.videoId === state?.video?.videoId) {
+      updateCurrentTranscript(message.time);
+    }
+    if (message.type === "DRAFT_READY" && message.tabId === activeTabId) loadDraft();
+    if (message.type === "DRAFT_CANCELLED" && message.tabId === activeTabId) discardDraft();
+  });
+}
 
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
@@ -82,11 +88,14 @@ async function renderState() {
 
   const hasTranscript = state.transcript.length > 0;
   const isSaved = Boolean(state.sessionPath);
+  elements.transcriptCount.textContent = state.transcript.length;
+  elements.saveStatus.className = `status-chip ${isSaved ? "saved" : hasTranscript ? "ready" : "idle"}`;
+  elements.saveStatus.textContent = isSaved ? "已入库" : hasTranscript ? "待入库" : "未读取";
   elements.saveToVaultButton.disabled = !hasTranscript || isSaved;
-  elements.saveToVaultButton.textContent = isSaved ? "已保存" : "保存到知识库";
+  elements.saveToVaultButton.querySelector("span").textContent = isSaved ? "已保存到知识库" : "保存到知识库";
   elements.transcriptEmpty.classList.toggle("hidden", hasTranscript);
   elements.transcriptList.classList.toggle("hidden", !hasTranscript);
-  elements.loadTranscriptButton.textContent = hasTranscript ? "重新获取" : "获取字幕";
+  elements.loadTranscriptButton.querySelector("span").textContent = hasTranscript ? "重新获取" : "获取字幕";
   elements.transcriptList.replaceChildren(...state.transcript.map((item) => {
     const row = document.createElement("div");
     row.className = "transcript-row";
@@ -108,10 +117,45 @@ async function renderState() {
     return row;
   }));
 
-  const stored = await chrome.storage.local.get(`records:${state.video.videoId}`);
-  records = stored[`records:${state.video.videoId}`] || [];
+  if (!isPreview) {
+    const stored = await chrome.storage.local.get(`records:${state.video.videoId}`);
+    records = stored[`records:${state.video.videoId}`] || [];
+  }
   renderRecords();
   updateCurrentTranscript(state.currentTime);
+}
+
+function initializePreview() {
+  activeTabId = 1;
+  state = {
+    video: {
+      videoId: "preview",
+      title: "How I Learn Anything Faster — 建立自己的学习系统"
+    },
+    currentTime: 78,
+    sessionPath: "",
+    transcript: [
+      { start: 42, text: "Most people try to learn by collecting more information." },
+      { start: 58, text: "But the real shift happens when you turn information into a question." },
+      { start: 76, text: "A useful learning system should help you notice, connect, and retrieve ideas." },
+      { start: 94, text: "Your notes are not an archive. They are material for your future thinking." },
+      { start: 116, text: "The smallest useful habit is to capture why an idea matters to you." },
+      { start: 139, text: "That personal connection is what makes knowledge easier to recall." }
+    ]
+  };
+  records = [{
+    timestamp: "01:16",
+    time: 76,
+    text: "A useful learning system should help you notice, connect, and retrieve ideas.",
+    note: "知识库不应该只是收藏夹。保存时要补一句：它改变了我什么判断？"
+  }];
+  renderState().then(() => {
+    draft = { videoId: "preview", timestamp: "01:34", time: 94, text: state.transcript[3].text };
+    elements.draftTime.textContent = draft.timestamp;
+    elements.draftText.textContent = draft.text;
+    elements.draftNote.disabled = false;
+    elements.saveButton.disabled = false;
+  });
 }
 
 async function requestTranscript() {
@@ -119,7 +163,7 @@ async function requestTranscript() {
   const requestedVideoId = state.video.videoId;
   elements.loadTranscriptButton.disabled = true;
   elements.loadTranscriptCta.disabled = true;
-  elements.loadTranscriptButton.textContent = "获取中…";
+  elements.loadTranscriptButton.querySelector("span").textContent = "获取中…";
   elements.loadTranscriptCta.textContent = "正在获取…";
 
   try {
@@ -142,14 +186,14 @@ async function requestTranscript() {
     elements.loadTranscriptButton.disabled = false;
     elements.loadTranscriptCta.disabled = false;
     elements.loadTranscriptCta.textContent = "获取当前视频字幕";
-    if (!state?.transcript?.length) elements.loadTranscriptButton.textContent = "获取字幕";
+    if (!state?.transcript?.length) elements.loadTranscriptButton.querySelector("span").textContent = "获取字幕";
   }
 }
 
 async function saveToVault() {
   if (!activeTabId || !state?.transcript?.length || state.sessionPath) return;
   elements.saveToVaultButton.disabled = true;
-  elements.saveToVaultButton.textContent = "保存中…";
+  elements.saveToVaultButton.querySelector("span").textContent = "保存中…";
   try {
     const result = await chrome.tabs.sendMessage(activeTabId, {
       type: "SAVE_TO_VAULT",
@@ -161,7 +205,7 @@ async function saveToVault() {
     showToast("已保存到知识库");
   } catch (error) {
     elements.saveToVaultButton.disabled = false;
-    elements.saveToVaultButton.textContent = "保存到知识库";
+    elements.saveToVaultButton.querySelector("span").textContent = "保存到知识库";
     showToast(error.message || "保存失败");
   }
 }
@@ -240,10 +284,10 @@ function renderRecords() {
         <button class="record-time">${escapeHtml(record.timestamp)}</button>
         <button class="delete-button" aria-label="删除记录">删除</button>
       </div>
-      <blockquote></blockquote>
+      <div class="record-quote"></div>
       ${record.note ? "<div class=\"record-note\"></div>" : ""}
     `;
-    article.querySelector("blockquote").textContent = record.text || "（无字幕）";
+    article.querySelector(".record-quote").textContent = record.text || "（无字幕）";
     article.querySelector(".record-note")?.append(document.createTextNode(record.note));
     article.querySelector(".record-time").addEventListener("click", () => chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: record.time }));
     article.querySelector(".delete-button").addEventListener("click", () => deleteRecord(index));
@@ -293,6 +337,11 @@ function showEmpty(text) {
   elements.transcriptPanel.classList.add("hidden");
   elements.recordsPanel.classList.add("hidden");
   elements.loadTranscriptButton.disabled = true;
+  elements.saveToVaultButton.disabled = true;
+  elements.saveToVaultButton.querySelector("span").textContent = "保存到知识库";
+  elements.transcriptCount.textContent = "0";
+  elements.saveStatus.className = "status-chip idle";
+  elements.saveStatus.textContent = "未读取";
   elements.empty.querySelector("p").textContent = text;
 }
 

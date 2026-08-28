@@ -7,55 +7,85 @@
     <link rel="stylesheet" href="sidepanel.css">
   </head>
   <body>
-    <header class="header">
-      <div>
-        <div class="eyebrow">YOUTUBE STUDY</div>
-        <h1 id="video-title">等待 YouTube 视频</h1>
-      </div>
-      <div class="header-actions">
-        <button id="save-to-vault-button" class="primary-button" disabled>保存到知识库</button>
-        <button id="load-transcript-button" class="ghost-button" disabled>获取字幕</button>
-      </div>
-    </header>
+    <div class="app-top">
+      <header class="header">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M4.5 5.5c2.6-.5 5 .1 7.5 1.7v11c-2.5-1.6-4.9-2.2-7.5-1.7zM19.5 5.5c-2.6-.5-5 .1-7.5 1.7v11c2.5-1.6 4.9-2.2 7.5-1.7z"/>
+              <path d="m9.7 10 3.6 2-3.6 2z"/>
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <div class="eyebrow">维小灿 · YOUTUBE STUDY</div>
+            <h1 id="video-title">等待 YouTube 视频</h1>
+          </div>
+          <span id="save-status" class="status-chip idle">未读取</span>
+        </div>
 
-    <nav class="tabs" aria-label="内容区域">
-      <button class="tab active" data-tab="transcript">字幕</button>
-      <button class="tab" data-tab="records">学习笔记 <span id="record-count">0</span></button>
-    </nav>
+        <div class="header-actions">
+          <button id="save-to-vault-button" class="primary-button" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0 3-3m-3 3L7 9M4 14.5v1.5h12v-1.5"/></svg>
+            <span>保存到知识库</span>
+          </button>
+          <button id="load-transcript-button" class="secondary-button" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 1 0 16 12m0-5V3.5M16 7h-3.5"/></svg>
+            <span>获取字幕</span>
+          </button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="内容区域">
+        <button class="tab active" data-tab="transcript">
+          <span>跟读字幕</span><span id="transcript-count" class="tab-count">0</span>
+        </button>
+        <button class="tab" data-tab="records">
+          <span>学习笔记</span><span id="record-count" class="tab-count">0</span>
+        </button>
+      </nav>
+    </div>
 
     <main>
       <section id="empty-state" class="empty-state">
-        <div class="empty-icon">▶</div>
-        <p>打开一条带字幕的 YouTube 视频。</p>
+        <div class="empty-note">
+          <div class="empty-icon" aria-hidden="true">▶</div>
+          <p>打开一条带字幕的 YouTube 视频，开始边看边学。</p>
+          <span>字幕只在你主动获取后读取，内容也只在你确认后进入知识库。</span>
+        </div>
       </section>
 
-      <section id="transcript-panel" class="panel hidden">
+      <section id="transcript-panel" class="panel hidden" aria-label="视频字幕">
         <div id="transcript-empty" class="transcript-empty hidden">
-          <p>需要字幕时再获取，避免浏览其他 YouTube 视频时自动请求。</p>
+          <div class="empty-kicker">READY WHEN YOU ARE</div>
+          <h2>先看一会儿，再决定是否读取</h2>
+          <p>需要时再获取字幕，不会因为你随手打开视频就自动保存。</p>
           <button id="load-transcript-cta">获取当前视频字幕</button>
         </div>
         <div id="transcript-list" class="transcript-list"></div>
       </section>
 
-      <section id="records-panel" class="panel hidden">
+      <section id="records-panel" class="panel hidden" aria-label="学习笔记">
         <div id="records-list" class="records-list"></div>
       </section>
     </main>
 
     <section id="composer" class="composer" aria-label="学习记录编辑器">
       <div class="composer-topline">
+        <div class="composer-heading">
+          <span class="composer-dot" aria-hidden="true"></span>
+          <span>记录此刻</span>
+        </div>
         <span id="draft-time" class="time-chip"></span>
-        <span>保存此刻</span>
       </div>
-      <blockquote id="draft-text"></blockquote>
-      <textarea id="draft-note" rows="3" placeholder="写下想法或问题，也可以留空……"></textarea>
+      <div id="draft-text" class="composer-quote"></div>
+      <textarea id="draft-note" rows="3" placeholder="这里写你的理解、问题或灵感……"></textarea>
       <div class="composer-actions">
-        <span>Enter 保存 · Alt+N 放弃并继续 · Shift+Enter 换行</span>
-        <button id="save-button">保存并继续</button>
+        <span class="keyboard-hint"><kbd>Enter</kbd> 保存　<kbd>Alt</kbd> + <kbd>N</kbd> 快速记录</span>
+        <button id="save-button">保存笔记</button>
       </div>
     </section>
 
-    <div id="toast" class="toast hidden"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <script src="sidepanel.js"></script>
   </body>
 </html>
