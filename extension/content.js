@@ -41,7 +41,11 @@ window.addEventListener("message", (event) => {
 
   const sameVideo = videoInfo?.videoId === message.payload.videoId;
   videoInfo = message.payload;
-  if (!sameVideo) transcript = [];
+  if (!sameVideo) {
+    transcript = [];
+    sessionPath = "";
+    restoreCachedTranscript(message.payload.videoId);
+  }
   notifyState();
 });
 
@@ -141,6 +145,19 @@ async function loadStudyTranscript(video) {
       url: video.url
     }
   });
+}
+
+async function restoreCachedTranscript(videoId) {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "RESTORE_TRANSCRIPT",
+      videoId
+    });
+    if (videoInfo?.videoId !== videoId || !result?.ok || !result.transcript?.length) return;
+    transcript = result.transcript;
+    sessionPath = result.sessionPath || "";
+    notifyState();
+  } catch (_) {}
 }
 
 async function saveToVault(records) {

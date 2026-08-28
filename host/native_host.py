@@ -9,7 +9,7 @@ import struct
 import sys
 from pathlib import Path
 
-from learning_service import fetch_transcript, save_study_note, sync_records
+from learning_service import fetch_transcript, load_cached_transcript, save_study_note, sync_records
 
 
 VAULT = Path(__file__).resolve().parents[4]
@@ -50,6 +50,15 @@ def handle(message: dict) -> dict:
     if action == "load_transcript":
         video = message.get("video") or {}
         note_path, transcript = fetch_transcript(VAULT, video)
+        path_value = str(note_path) if note_path else ""
+        return {
+            "ok": True,
+            "sessionPath": path_value,
+            "notePath": path_value,
+            "transcript": transcript,
+        }
+    if action == "restore_transcript":
+        note_path, transcript = load_cached_transcript(VAULT, message.get("videoId", ""))
         path_value = str(note_path) if note_path else ""
         return {
             "ok": True,

@@ -205,19 +205,31 @@ def existing_note(vault: Path, metadata: dict | None) -> Path | None:
     return note if note.exists() else None
 
 
+def load_cached_transcript(vault: Path, video_id: str) -> tuple[Path | None, list[dict]]:
+    """Return an existing transcript cache without downloading anything."""
+    video_id = validate_video_id(video_id)
+    metadata = load_metadata(vault, video_id)
+    transcript_path = cache_dir(vault, video_id) / "transcript.json"
+    if not metadata or not transcript_path.exists():
+        return None, []
+    try:
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, []
+    if not isinstance(transcript, list) or not transcript:
+        return None, []
+    return existing_note(vault, metadata), transcript
+
+
 def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]:
     """Fetch and cache a transcript without creating a visible knowledge note."""
     video_id = validate_video_id(video.get("videoId", ""))
     cache = cache_dir(vault, video_id)
     transcript_path = cache / "transcript.json"
     metadata = load_metadata(vault, video_id)
-    if metadata and transcript_path.exists():
-        try:
-            transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
-            if isinstance(transcript, list) and transcript:
-                return existing_note(vault, metadata), transcript
-        except (OSError, json.JSONDecodeError):
-            pass
+    note, cached = load_cached_transcript(vault, video_id)
+    if cached:
+        return note, cached
 
     yt_dlp = shutil.which("yt-dlp")
     if not yt_dlp:
