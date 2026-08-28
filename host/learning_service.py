@@ -8,6 +8,9 @@ side panel is kept under .claudian/cache/youtube-study and is safe to rebuild.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 import re
 import shutil
@@ -23,6 +26,7 @@ HOST = "127.0.0.1"
 PORT = 43127
 NOTES_REL = Path("Wiki") / "人工智能" / "AI编程与工程"
 CACHE_REL = Path(".claudian") / "cache" / "youtube-study"
+ATTACHMENTS_REL = Path("原始材料") / "_附件" / "youtube-study"
 RECORDS_START = "<!-- youtube-study:records:start -->"
 RECORDS_END = "<!-- youtube-study:records:end -->"
 TRANSCRIPT_START = "<!-- youtube-study:transcript:start -->"
@@ -50,6 +54,13 @@ def atomic_text(path: Path, value: str) -> None:
 
 def atomic_json(path: Path, value: object) -> None:
     atomic_text(path, json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def atomic_bytes(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_bytes(value)
+    temp.replace(path)
 
 
 def cache_dir(vault: Path, video_id: str) -> Path:
@@ -115,17 +126,78 @@ def transcript_markdown(transcript: list[dict], url: str) -> str:
     return "\n".join(lines) or "当前没有可用字幕。"
 
 
-def records_markdown(records: list[dict]) -> str:
+def record_screenshot_ids(record: dict) -> list[str]:
+    values = record.get("screenshots") or []
+    return [
+        str(item.get("id") or "")
+        for item in values
+        if isinstance(item, dict) and item.get("id")
+    ]
+
+
+def records_markdown(records: list[dict], screenshot_paths: dict[str, str] | None = None) -> str:
+    screenshot_paths = screenshot_paths or {}
     sections: list[str] = []
     for record in records:
         timestamp = str(record.get("timestamp") or "0:00")
         text = str(record.get("text") or "（当时未获取到字幕）")
         note = str(record.get("note") or "").strip()
         sections.extend([f"### {timestamp}", "", "> " + text.replace("\n", "\n> ")])
+        for screenshot_id in record_screenshot_ids(record):
+            screenshot_path = screenshot_paths.get(screenshot_id)
+            if screenshot_path:
+                sections.extend(["", f"![[{screenshot_path}]]"])
         if note:
             sections.extend(["", note])
         sections.append("")
     return "\n".join(sections).rstrip() or "暂无观看记录。"
+
+
+def store_screenshot(vault: Path, video_id: str, image_data_url: str, time_seconds: float) -> dict:
+    """Store a user-provided screenshot in the hidden video cache."""
+    video_id = validate_video_id(video_id)
+    match = re.fullmatch(r"data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)", image_data_url or "")
+    if not match:
+        raise ValueError("截图格式无效")
+    extension = {"jpeg": "jpg", "png": "png", "webp": "webp"}[match.group(1)]
+    try:
+        payload = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("截图数据损坏") from error
+    if not payload or len(payload) > 2_500_000:
+        raise ValueError("截图不能超过 2.5 MB")
+    if extension == "jpg" and not payload.startswith(b"\xff\xd8\xff"):
+        raise ValueError("截图不是有效的 JPEG")
+    if extension == "png" and not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("截图不是有效的 PNG")
+    if extension == "webp" and not (payload.startswith(b"RIFF") and payload[8:12] == b"WEBP"):
+        raise ValueError("截图不是有效的 WebP")
+
+    millis = max(0, int(float(time_seconds or 0) * 1000))
+    digest = hashlib.sha256(payload).hexdigest()[:10]
+    screenshot_id = f"{millis:010d}-{digest}.{extension}"
+    path = cache_dir(vault, video_id) / "screenshots" / screenshot_id
+    atomic_bytes(path, payload)
+    return {"id": screenshot_id, "size": len(payload)}
+
+
+def materialize_record_screenshots(vault: Path, video_id: str, records: list[dict]) -> dict[str, str]:
+    """Copy screenshots referenced by records into the Obsidian attachment folder."""
+    video_id = validate_video_id(video_id)
+    paths: dict[str, str] = {}
+    for record in records:
+        for screenshot_id in record_screenshot_ids(record):
+            if not re.fullmatch(r"[0-9]{10}-[a-f0-9]{10}\.(?:jpg|png|webp)", screenshot_id):
+                continue
+            source = cache_dir(vault, video_id) / "screenshots" / screenshot_id
+            if not source.exists():
+                continue
+            destination = vault / ATTACHMENTS_REL / video_id / screenshot_id
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                shutil.copy2(source, destination)
+            paths[screenshot_id] = destination.relative_to(vault).as_posix()
+    return paths
 
 
 def replace_section(text: str, heading: str, next_heading: str, start: str, end: str, body: str) -> str:
@@ -295,8 +367,16 @@ def sync_records(vault: Path, video_id: str, records: list[dict]) -> Path:
     if not note.exists():
         raise RuntimeError("当前视频笔记不存在，请重新获取字幕")
     atomic_json(cache_dir(vault, video_id) / "records.json", records)
+    screenshot_paths = materialize_record_screenshots(vault, video_id, records)
     text = note.read_text(encoding="utf-8")
-    updated = replace_section(text, "我的记录", "完整字幕", RECORDS_START, RECORDS_END, records_markdown(records))
+    updated = replace_section(
+        text,
+        "我的记录",
+        "完整字幕",
+        RECORDS_START,
+        RECORDS_END,
+        records_markdown(records, screenshot_paths),
+    )
     atomic_text(note, updated)
     return note
 

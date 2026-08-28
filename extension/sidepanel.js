@@ -16,6 +16,10 @@ const elements = {
   draftTime: document.querySelector("#draft-time"),
   draftText: document.querySelector("#draft-text"),
   draftNote: document.querySelector("#draft-note"),
+  addScreenshotsButton: document.querySelector("#add-screenshots-button"),
+  screenshotInput: document.querySelector("#screenshot-input"),
+  screenshotHint: document.querySelector("#screenshot-hint"),
+  screenshotPreviewList: document.querySelector("#screenshot-preview-list"),
   saveButton: document.querySelector("#save-button"),
   toast: document.querySelector("#toast")
 };
@@ -26,6 +30,8 @@ let records = [];
 let draft = null;
 let currentTranscriptIndex = -1;
 let activePanel = "transcript";
+let isAddingScreenshots = false;
+const screenshotPreviews = new Map();
 const isPreview = new URLSearchParams(window.location.search).has("preview");
 
 setComposerIdle();
@@ -67,6 +73,11 @@ document.querySelectorAll(".tab").forEach((button) => {
 });
 
 elements.saveButton.addEventListener("click", saveDraft);
+elements.draftNote.addEventListener("input", () => {
+  if (!draft) return;
+  draft.note = elements.draftNote.value;
+  persistDraft();
+});
 elements.draftNote.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -77,6 +88,32 @@ elements.draftNote.addEventListener("keydown", (event) => {
 elements.loadTranscriptButton.addEventListener("click", requestTranscript);
 elements.loadTranscriptCta.addEventListener("click", requestTranscript);
 elements.saveToVaultButton.addEventListener("click", saveToVault);
+elements.addScreenshotsButton.addEventListener("click", () => elements.screenshotInput.click());
+elements.screenshotInput.addEventListener("change", () => {
+  addScreenshotFiles(elements.screenshotInput.files);
+  elements.screenshotInput.value = "";
+});
+elements.composer.addEventListener("paste", (event) => {
+  const images = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith("image/"));
+  if (!images.length || !draft) return;
+  event.preventDefault();
+  addScreenshotFiles(images);
+});
+elements.composer.addEventListener("dragover", (event) => {
+  if (!draft) return;
+  event.preventDefault();
+  elements.composer.classList.add("drop-active");
+});
+elements.composer.addEventListener("dragleave", () => elements.composer.classList.remove("drop-active"));
+elements.composer.addEventListener("drop", (event) => {
+  elements.composer.classList.remove("drop-active");
+  if (!draft) return;
+  event.preventDefault();
+  addScreenshotFiles(event.dataTransfer?.files || []);
+});
+new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty("--composer-offset", `${Math.ceil(entry.contentRect.height) + 34}px`);
+}).observe(elements.composer);
 
 async function renderState() {
   if (!state?.video) return showEmpty("当前页面没有可读取的视频。");
@@ -150,11 +187,19 @@ function initializePreview() {
     note: "知识库不应该只是收藏夹。保存时要补一句：它改变了我什么判断？"
   }];
   renderState().then(() => {
-    draft = { videoId: "preview", timestamp: "01:34", time: 94, text: state.transcript[3].text };
+    draft = {
+      videoId: "preview",
+      timestamp: "01:34",
+      time: 94,
+      text: state.transcript[3].text,
+      screenshots: [{ id: "0000094000-preview001.webp" }, { id: "0000094000-preview002.webp" }]
+    };
     elements.draftTime.textContent = draft.timestamp;
     elements.draftText.textContent = draft.text;
     elements.draftNote.disabled = false;
+    elements.addScreenshotsButton.disabled = false;
     elements.saveButton.disabled = false;
+    renderDraftScreenshots();
   });
 }
 
@@ -216,11 +261,14 @@ async function loadDraft() {
   const stored = await chrome.storage.session.get(key);
   if (!stored[key]) return;
   draft = stored[key];
+  draft.screenshots = Array.isArray(draft.screenshots) ? draft.screenshots : [];
   elements.draftTime.textContent = draft.timestamp;
   elements.draftText.textContent = draft.text || "当前没有可读取的字幕，你仍可以记录想法。";
-  elements.draftNote.value = "";
+  elements.draftNote.value = draft.note || "";
   elements.draftNote.disabled = false;
+  elements.addScreenshotsButton.disabled = false;
   elements.saveButton.disabled = false;
+  renderDraftScreenshots();
   elements.draftNote.focus();
 }
 
@@ -263,7 +311,116 @@ function setComposerIdle() {
   elements.draftText.textContent = "按 Alt+N 暂停视频并定位当前字幕，然后在这里写笔记。";
   elements.draftNote.value = "";
   elements.draftNote.disabled = true;
+  elements.addScreenshotsButton.disabled = true;
   elements.saveButton.disabled = true;
+  elements.screenshotHint.textContent = "支持多选、拖入或粘贴";
+  elements.screenshotPreviewList.replaceChildren();
+  elements.screenshotPreviewList.classList.add("hidden");
+  screenshotPreviews.clear();
+}
+
+function persistDraft() {
+  if (!draft || isPreview) return;
+  chrome.storage.session.set({ [`draft:${activeTabId}`]: draft }).catch(() => {});
+}
+
+async function addScreenshotFiles(fileList) {
+  if (!draft || isAddingScreenshots) return;
+  const targetDraft = draft;
+  const files = [...fileList].filter((file) => file.type.startsWith("image/"));
+  const remaining = 8 - (draft.screenshots?.length || 0);
+  if (!files.length) return showToast("请选择图片文件");
+  if (remaining <= 0) return showToast("一条笔记最多添加 8 张截图");
+  const selected = files.slice(0, remaining);
+  isAddingScreenshots = true;
+  elements.addScreenshotsButton.disabled = true;
+  elements.saveButton.disabled = true;
+  elements.screenshotHint.textContent = `正在处理 0/${selected.length}`;
+
+  try {
+    for (let index = 0; index < selected.length; index += 1) {
+      const normalized = await normalizeScreenshot(selected[index]);
+      const result = await chrome.runtime.sendMessage({
+        type: "STORE_SCREENSHOT",
+        videoId: targetDraft.videoId,
+        time: targetDraft.time,
+        imageDataUrl: normalized.dataUrl
+      });
+      if (draft !== targetDraft) throw new Error("当前笔记已切换，请重新添加截图");
+      if (!result?.ok || !result.screenshot?.id) throw new Error(result?.error || "截图保存失败");
+      const screenshot = {
+        ...result.screenshot,
+        width: normalized.width,
+        height: normalized.height
+      };
+      targetDraft.screenshots = [...(targetDraft.screenshots || []), screenshot];
+      screenshotPreviews.set(screenshot.id, normalized.dataUrl);
+      elements.screenshotHint.textContent = `正在处理 ${index + 1}/${selected.length}`;
+      persistDraft();
+      renderDraftScreenshots();
+    }
+    showToast(`已添加 ${selected.length} 张截图`);
+  } catch (error) {
+    showToast(error.message || "截图处理失败");
+  } finally {
+    isAddingScreenshots = false;
+    elements.addScreenshotsButton.disabled = !draft;
+    elements.saveButton.disabled = !draft;
+    elements.screenshotHint.textContent = "支持多选、拖入或粘贴";
+  }
+}
+
+async function normalizeScreenshot(file) {
+  if (file.size > 15 * 1024 * 1024) throw new Error("单张原图不能超过 15 MB");
+  const bitmap = await createImageBitmap(file);
+  const maxDimension = 1600;
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  return {
+    dataUrl: canvas.toDataURL("image/webp", 0.9),
+    width,
+    height
+  };
+}
+
+function renderDraftScreenshots() {
+  const screenshots = draft?.screenshots || [];
+  elements.screenshotPreviewList.classList.toggle("hidden", !screenshots.length);
+  elements.screenshotPreviewList.replaceChildren(...screenshots.map((screenshot, index) => {
+    const item = document.createElement("div");
+    item.className = "screenshot-preview";
+    const preview = screenshotPreviews.get(screenshot.id);
+    if (preview) {
+      const image = document.createElement("img");
+      image.src = preview;
+      image.alt = `截图 ${index + 1}`;
+      item.append(image);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "screenshot-placeholder";
+      placeholder.textContent = `截图 ${index + 1}\n已缓存`;
+      item.append(placeholder);
+    }
+    const remove = document.createElement("button");
+    remove.className = "remove-screenshot";
+    remove.type = "button";
+    remove.setAttribute("aria-label", `移除截图 ${index + 1}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      screenshotPreviews.delete(screenshot.id);
+      draft.screenshots.splice(index, 1);
+      persistDraft();
+      renderDraftScreenshots();
+    });
+    item.append(remove);
+    return item;
+  }));
 }
 
 function renderRecords() {
@@ -286,6 +443,7 @@ function renderRecords() {
       </div>
       <div class="record-quote"></div>
       ${record.note ? "<div class=\"record-note\"></div>" : ""}
+      ${record.screenshots?.length ? `<div class="record-screenshots">📷 ${record.screenshots.length} 张截图</div>` : ""}
     `;
     article.querySelector(".record-quote").textContent = record.text || "（无字幕）";
     article.querySelector(".record-note")?.append(document.createTextNode(record.note));

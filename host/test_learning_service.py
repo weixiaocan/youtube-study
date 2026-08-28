@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,10 +11,51 @@ from learning_service import (
     fetch_transcript,
     load_cached_transcript,
     save_study_note,
+    store_screenshot,
 )
 
 
 class ManualSaveTest(unittest.TestCase):
+    def test_multiple_screenshots_stay_hidden_until_note_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            video_id = "images123"
+            metadata = {
+                "videoId": video_id,
+                "title": "Visual lesson",
+                "author": "Example Creator",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+            }
+            cache = cache_dir(vault, video_id)
+            atomic_json(cache / "metadata.json", metadata)
+            atomic_json(
+                cache / "transcript.json",
+                [{"id": 0, "start": 5.0, "duration": 2.0, "text": "Look at the diagram."}],
+            )
+            screenshots = []
+            for index in range(2):
+                payload = b"\x89PNG\r\n\x1a\n" + f"image-{index}".encode()
+                data_url = "data:image/png;base64," + base64.b64encode(payload).decode()
+                screenshots.append(store_screenshot(vault, video_id, data_url, 5 + index))
+
+            self.assertEqual(list((vault / "原始材料").rglob("*.png")), [])
+
+            note = save_study_note(
+                vault,
+                video_id,
+                [{
+                    "timestamp": "0:05",
+                    "text": "Look at the diagram.",
+                    "note": "Two useful views.",
+                    "screenshots": screenshots,
+                }],
+            )
+
+            attachments = list((vault / "原始材料" / "_附件" / "youtube-study" / video_id).glob("*.png"))
+            self.assertEqual(len(attachments), 2)
+            text = note.read_text(encoding="utf-8")
+            self.assertEqual(text.count("![[原始材料/_附件/youtube-study/"), 2)
+
     def test_cached_transcript_can_be_restored_without_fetching(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)

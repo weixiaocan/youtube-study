@@ -78,6 +78,15 @@
         <span id="draft-time" class="time-chip"></span>
       </div>
       <div id="draft-text" class="composer-quote"></div>
+      <div class="composer-media-row">
+        <button id="add-screenshots-button" class="media-button" disabled>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4.5h14v11H3zM6 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm-2 6 3.5-3.5 2.5 2 2-2 4 3.5"/></svg>
+          添加截图
+        </button>
+        <span id="screenshot-hint">支持多选、拖入或粘贴</span>
+        <input id="screenshot-input" type="file" accept="image/*" multiple hidden>
+      </div>
+      <div id="screenshot-preview-list" class="screenshot-preview-list hidden" aria-label="待保存截图"></div>
       <textarea id="draft-note" rows="3" placeholder="这里写你的理解、问题或灵感……"></textarea>
       <div class="composer-actions">
         <span class="keyboard-hint"><kbd>Enter</kbd> 保存　<kbd>Alt</kbd> + <kbd>N</kbd> 快速记录</span>

@@ -74,6 +74,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "STORE_SCREENSHOT") {
+    nativeRequest({
+      action: "store_screenshot",
+      videoId: message.videoId,
+      time: message.time,
+      imageDataUrl: message.imageDataUrl
+    }).then(sendResponse);
+    return true;
+  }
+
   if (message?.type === "SAVE_TO_VAULT") {
     nativeRequest({ action: "save_to_vault", videoId: message.videoId, records: message.records }).then(sendResponse);
     return true;

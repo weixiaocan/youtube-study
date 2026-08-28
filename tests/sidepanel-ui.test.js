@@ -16,8 +16,23 @@ test("keeps the interaction hooks used by the extension", () => {
     "transcript-list",
     "records-list",
     "draft-note",
+    "add-screenshots-button",
+    "screenshot-input",
+    "screenshot-preview-list",
     "save-button"
   ].forEach((id) => assert.match(html, new RegExp(`id=["']${id}["']`)));
+});
+
+test("supports several user-provided screenshots without tab capture permissions", () => {
+  const manifest = fs.readFileSync(path.join(extensionDir, "manifest.json"), "utf8");
+  assert.match(html, /id="screenshot-input"[^>]*multiple/);
+  assert.match(js, /addScreenshotFiles/);
+  assert.match(js, /clipboardData/);
+  assert.match(js, /dataTransfer/);
+  assert.match(js, /draft\.note = elements\.draftNote\.value/);
+  assert.match(js, /chrome\.storage\.session\.set/);
+  assert.doesNotMatch(manifest, /activeTab/);
+  assert.doesNotMatch(js, /captureVisibleTab/);
 });
 
 test("uses the warm learning-workbench design tokens", () => {

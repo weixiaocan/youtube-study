@@ -9,7 +9,13 @@ import struct
 import sys
 from pathlib import Path
 
-from learning_service import fetch_transcript, load_cached_transcript, save_study_note, sync_records
+from learning_service import (
+    fetch_transcript,
+    load_cached_transcript,
+    save_study_note,
+    store_screenshot,
+    sync_records,
+)
 
 
 VAULT = Path(__file__).resolve().parents[4]
@@ -66,6 +72,14 @@ def handle(message: dict) -> dict:
             "notePath": path_value,
             "transcript": transcript,
         }
+    if action == "store_screenshot":
+        screenshot = store_screenshot(
+            VAULT,
+            message.get("videoId", ""),
+            message.get("imageDataUrl", ""),
+            message.get("time", 0),
+        )
+        return {"ok": True, "screenshot": screenshot}
     if action == "save_to_vault":
         note_path = save_study_note(
             VAULT,
