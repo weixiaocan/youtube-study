@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Persist one visible Markdown note per YouTube video.
 
-Visible knowledge currently defaults to Wiki/人工智能/AI编程与工程. JSON needed by the
-side panel is kept under .claudian/cache/youtube-study and is safe to rebuild.
+Notes are raw material (原始材料/学习笔记/YouTube学习); the Wiki is curated
+separately from them. JSON needed by the side panel is kept under
+.claudian/cache/youtube-study and is safe to rebuild.
 """
 
 from __future__ import annotations
@@ -17,20 +18,18 @@ import shutil
 import subprocess
 import tempfile
 from datetime import date, datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 
-HOST = "127.0.0.1"
-PORT = 43127
-NOTES_REL = Path("Wiki") / "人工智能" / "AI编程与工程"
+NOTES_REL = Path("原始材料") / "学习笔记" / "YouTube学习"
 CACHE_REL = Path(".claudian") / "cache" / "youtube-study"
 ATTACHMENTS_REL = Path("原始材料") / "_附件" / "youtube-study"
 RECORDS_START = "<!-- youtube-study:records:start -->"
 RECORDS_END = "<!-- youtube-study:records:end -->"
 TRANSCRIPT_START = "<!-- youtube-study:transcript:start -->"
 TRANSCRIPT_END = "<!-- youtube-study:transcript:end -->"
+SCREENSHOT_ID = re.compile(r"[0-9]{10}-[a-f0-9]{10}\.(?:jpg|png|webp)")
 
 
 def safe_filename(value: str, limit: int = 96) -> str:
@@ -78,6 +77,97 @@ def load_metadata(vault: Path, video_id: str) -> dict | None:
         return None
 
 
+def _cache_cleanup_targets(
+    vault: Path,
+    *,
+    now: datetime | None = None,
+    max_age_days: int = 30,
+    max_entries: int = 50,
+) -> list[tuple[str, Path]]:
+    cache_root = vault / CACHE_REL
+    if not cache_root.exists():
+        return []
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    candidates: list[tuple[datetime, str, Path]] = []
+    for directory in cache_root.iterdir():
+        if not directory.is_dir():
+            continue
+        try:
+            video_id = validate_video_id(directory.name)
+        except ValueError:
+            continue
+        metadata = load_metadata(vault, video_id)
+        if metadata and metadata.get("notePath"):
+            continue
+        created_at = None
+        if metadata and metadata.get("createdAt"):
+            try:
+                created_at = datetime.fromisoformat(str(metadata["createdAt"]).replace("Z", "+00:00"))
+            except ValueError:
+                created_at = None
+        if created_at is None:
+            created_at = datetime.fromtimestamp(directory.stat().st_mtime, tz=timezone.utc)
+        elif created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        candidates.append((created_at, video_id, directory))
+
+    cutoff = current.timestamp() - max(0, max_age_days) * 86400
+    expired = {video_id for created_at, video_id, _ in candidates if created_at.timestamp() < cutoff}
+    retained = sorted(
+        (item for item in candidates if item[1] not in expired),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    overflow = {video_id for _, video_id, _ in retained[max(0, max_entries):]}
+    remove_ids = expired | overflow
+    return [(video_id, directory) for _, video_id, directory in candidates if video_id in remove_ids]
+
+
+def cache_cleanup_status(
+    vault: Path,
+    *,
+    now: datetime | None = None,
+    max_age_days: int = 30,
+    max_entries: int = 50,
+) -> dict:
+    targets = _cache_cleanup_targets(
+        vault,
+        now=now,
+        max_age_days=max_age_days,
+        max_entries=max_entries,
+    )
+    total_bytes = sum(
+        path.stat().st_size
+        for _, directory in targets
+        for path in directory.rglob("*")
+        if path.is_file()
+    )
+    return {"removableCount": len(targets), "removableBytes": total_bytes}
+
+
+def cleanup_uncommitted_cache(
+    vault: Path,
+    *,
+    now: datetime | None = None,
+    max_age_days: int = 30,
+    max_entries: int = 50,
+) -> list[str]:
+    """Remove expired hidden caches that have never been saved to the vault."""
+    targets = _cache_cleanup_targets(
+        vault,
+        now=now,
+        max_age_days=max_age_days,
+        max_entries=max_entries,
+    )
+    removed: list[str] = []
+    for video_id, directory in targets:
+        shutil.rmtree(directory)
+        removed.append(video_id)
+    return removed
+
+
 def note_from_metadata(vault: Path, metadata: dict) -> Path:
     note_path = metadata.get("notePath")
     if not note_path:
@@ -108,6 +198,15 @@ def parse_json3(path: Path) -> list[dict]:
             "text": text,
         })
     return items
+
+
+def subtitle_priority(path: Path) -> tuple[int, str]:
+    language = path.name.removesuffix(".json3").rsplit(".", 1)[-1].lower()
+    preferred = ("en-orig", "en", "zh-hans", "zh-hant", "zh")
+    try:
+        return preferred.index(language), language
+    except ValueError:
+        return len(preferred), language
 
 
 def format_time(seconds: float) -> str:
@@ -187,7 +286,7 @@ def materialize_record_screenshots(vault: Path, video_id: str, records: list[dic
     paths: dict[str, str] = {}
     for record in records:
         for screenshot_id in record_screenshot_ids(record):
-            if not re.fullmatch(r"[0-9]{10}-[a-f0-9]{10}\.(?:jpg|png|webp)", screenshot_id):
+            if not SCREENSHOT_ID.fullmatch(screenshot_id):
                 continue
             source = cache_dir(vault, video_id) / "screenshots" / screenshot_id
             if not source.exists():
@@ -200,14 +299,70 @@ def materialize_record_screenshots(vault: Path, video_id: str, records: list[dic
     return paths
 
 
+def cleanup_orphan_screenshots(vault: Path, video_id: str, records: list[dict]) -> list[str]:
+    """Delete managed screenshot files that no current record references."""
+    video_id = validate_video_id(video_id)
+    referenced = {
+        screenshot_id
+        for record in records
+        for screenshot_id in record_screenshot_ids(record)
+        if SCREENSHOT_ID.fullmatch(screenshot_id)
+    }
+    removed: set[str] = set()
+    roots = [
+        cache_dir(vault, video_id) / "screenshots",
+        vault / ATTACHMENTS_REL / video_id,
+    ]
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.iterdir():
+            if path.is_file() and SCREENSHOT_ID.fullmatch(path.name) and path.name not in referenced:
+                path.unlink()
+                removed.add(path.name)
+        if not any(root.iterdir()):
+            root.rmdir()
+    return sorted(removed)
+
+
+def delete_unreferenced_screenshots(vault: Path, video_id: str, screenshot_ids: list[str]) -> list[str]:
+    """Delete selected managed screenshots unless a saved local record still references them."""
+    video_id = validate_video_id(video_id)
+    referenced = {
+        screenshot_id
+        for record in load_cached_records(vault, video_id)
+        for screenshot_id in record_screenshot_ids(record)
+    }
+    requested = {
+        str(screenshot_id)
+        for screenshot_id in screenshot_ids
+        if SCREENSHOT_ID.fullmatch(str(screenshot_id)) and str(screenshot_id) not in referenced
+    }
+    deleted: set[str] = set()
+    for root in (cache_dir(vault, video_id) / "screenshots", vault / ATTACHMENTS_REL / video_id):
+        if not root.exists():
+            continue
+        for screenshot_id in requested:
+            path = root / screenshot_id
+            if path.is_file():
+                path.unlink()
+                deleted.add(screenshot_id)
+        if not any(root.iterdir()):
+            root.rmdir()
+    return sorted(deleted)
+
+
 def replace_section(text: str, heading: str, next_heading: str, start: str, end: str, body: str) -> str:
-    marked = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
+    # body 含用户笔记，可能带反斜杠（如 Windows 路径）；
+    # re.sub 的字符串替换模板会解析这些反斜杠，必须用函数形式原样插入。
     replacement = f"{start}\n{body}\n{end}"
-    if marked.search(text):
-        return marked.sub(replacement, text, count=1)
+    start_index = text.find(start)
+    end_index = text.rfind(end)
+    if start_index >= 0 and end_index >= start_index:
+        return text[:start_index] + replacement + text[end_index + len(end):]
     section = re.compile(rf"(?ms)(^## {re.escape(heading)}\s*$).*?(?=^## {re.escape(next_heading)}\s*$)")
     if section.search(text):
-        return section.sub(rf"\1\n\n{replacement}\n\n", text, count=1)
+        return section.sub(lambda m: f"{m.group(1)}\n\n{replacement}\n\n", text, count=1)
     return text.rstrip() + f"\n\n## {heading}\n\n{replacement}\n"
 
 
@@ -218,29 +373,31 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
     captured = str(metadata.get("createdAt") or date.today().isoformat())[:10]
     note = notes_root / f"{captured} {safe_filename(title)}.md"
     if note.exists():
-        return note
+        expected_video_id = json.dumps(metadata["videoId"], ensure_ascii=False)
+        existing_text = note.read_text(encoding="utf-8")
+        if re.search(rf"(?m)^video_id:\s*{re.escape(expected_video_id)}\s*$", existing_text):
+            return note
+        note = notes_root / f"{captured} {safe_filename(title)} [{metadata['videoId']}].md"
+        if note.exists():
+            suffixed_text = note.read_text(encoding="utf-8")
+            if not re.search(rf"(?m)^video_id:\s*{re.escape(expected_video_id)}\s*$", suffixed_text):
+                raise RuntimeError("同名笔记路径已被其他视频占用")
+            return note
     url = metadata["url"]
     content = "\n".join([
         "---",
-        'kb_type: "source-note"',
-        'kb_status: "processed"',
+        'kb_type: "video-note"',
+        'kb_status: "raw"',
         'kb_owner: "human"',
         'source_type: "youtube"',
         f"source: {json.dumps(url, ensure_ascii=False)}",
         f"video_id: {json.dumps(metadata['videoId'], ensure_ascii=False)}",
         f"creator: {json.dumps(metadata.get('author') or '', ensure_ascii=False)}",
         f"captured: {json.dumps(captured, ensure_ascii=False)}",
-        "domains:",
-        '  - "人工智能"',
-        "topics:",
-        '  - "AI编程"',
-        '  - "YouTube学习"',
         "kb_tags:",
-        '  - "kb/source-note"',
-        '  - "status/processed"',
+        '  - "kb/video-note"',
+        '  - "status/raw"',
         '  - "source/youtube"',
-        '  - "domain/人工智能"',
-        '  - "topic/AI编程"',
         "---",
         "",
         f"# {title}",
@@ -293,6 +450,15 @@ def load_cached_transcript(vault: Path, video_id: str) -> tuple[Path | None, lis
     return existing_note(vault, metadata), transcript
 
 
+def load_cached_records(vault: Path, video_id: str) -> list:
+    path = cache_dir(vault, validate_video_id(video_id)) / "records.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
 def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]:
     """Fetch and cache a transcript without creating a visible knowledge note."""
     video_id = validate_video_id(video.get("videoId", ""))
@@ -311,10 +477,10 @@ def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]
         output = str(Path(temp_name) / "%(id)s.%(ext)s")
         command = [
             yt_dlp, "--no-warnings", "--skip-download", "--write-subs", "--write-auto-subs",
-            "--sub-langs", "en-orig,en", "--sub-format", "json3", "--output", output, url,
+            "--sub-langs", "all", "--sub-format", "json3", "--output", output, url,
         ]
         completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
-        candidates = sorted(Path(temp_name).glob("*.json3"), key=lambda path: ("en-orig" not in path.name, path.name))
+        candidates = sorted(Path(temp_name).glob("*.json3"), key=subtitle_priority)
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "没有生成字幕文件").strip()[-800:]
             raise RuntimeError(f"yt-dlp 获取字幕失败：{detail}")
@@ -378,80 +544,23 @@ def sync_records(vault: Path, video_id: str, records: list[dict]) -> Path:
         records_markdown(records, screenshot_paths),
     )
     atomic_text(note, updated)
+    cleanup_orphan_screenshots(vault, video_id, records)
     return note
-
-
-class Handler(BaseHTTPRequestHandler):
-    vault: Path
-
-    def log_message(self, format: str, *args: object) -> None:
-        print(f"[youtube-study] {format % args}")
-
-    def _json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self) -> None:
-        if urlparse(self.path).path == "/health":
-            self._json(200, {"ok": True, "vault": str(self.vault), "notes": str(self.vault / NOTES_REL)})
-        else:
-            self._json(404, {"ok": False, "error": "not found"})
-
-    def do_POST(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            path = urlparse(self.path).path
-            if path == "/session":
-                note, transcript = fetch_transcript(self.vault, payload["video"])
-                note_path = str(note) if note else ""
-                self._json(200, {"ok": True, "sessionPath": note_path, "notePath": note_path, "transcript": transcript})
-                return
-            if path == "/session/save":
-                note = save_study_note(self.vault, payload["videoId"], payload.get("records", []))
-                self._json(200, {"ok": True, "sessionPath": str(note), "notePath": str(note)})
-                return
-            if path == "/records/sync":
-                note = sync_records(self.vault, payload["videoId"], payload.get("records", []))
-                self._json(200, {"ok": True, "sessionPath": str(note), "notePath": str(note)})
-                return
-            self._json(404, {"ok": False, "error": "not found"})
-        except Exception as error:  # noqa: BLE001
-            self._json(500, {"ok": False, "error": str(error)})
-
-
-def serve(vault: Path, port: int) -> None:
-    handler = type("VaultHandler", (Handler,), {"vault": vault})
-    server = ThreadingHTTPServer((HOST, port), handler)
-    print(f"YouTube 学习服务已启动：http://{HOST}:{port}")
-    print(f"笔记目录：{vault / NOTES_REL}")
-    server.serve_forever()
 
 
 def main() -> None:
     default_vault = Path(__file__).resolve().parents[4]
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["serve", "fetch"], nargs="?", default="serve")
+    parser = argparse.ArgumentParser(description="下载 YouTube 字幕进隐藏缓存；创建可见笔记只由扩展端在用户明确保存时完成")
     parser.add_argument("url", nargs="?")
     parser.add_argument("--vault", type=Path, default=default_vault)
-    parser.add_argument("--port", type=int, default=PORT)
     args = parser.parse_args()
+    if not args.url:
+        parser.error("需要 YouTube URL")
     vault = args.vault.resolve()
-    if args.command == "fetch":
-        if not args.url:
-            parser.error("fetch requires a YouTube URL")
-        parsed = urlparse(args.url)
-        video_id = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part).get("v", "")
-        _, transcript = fetch_transcript(vault, {"videoId": video_id, "url": args.url, "title": video_id})
-        note = save_study_note(vault, video_id, [])
-        print(json.dumps({"notePath": str(note), "segments": len(transcript)}, ensure_ascii=False))
-    else:
-        serve(vault, args.port)
+    parsed = urlparse(args.url)
+    video_id = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part).get("v", "")
+    _, transcript = fetch_transcript(vault, {"videoId": video_id, "url": args.url, "title": video_id})
+    print(json.dumps({"cacheDir": str(cache_dir(vault, video_id)), "segments": len(transcript)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

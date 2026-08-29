@@ -19,72 +19,56 @@
 }
 
 * { box-sizing: border-box; }
-html { overflow-x: hidden; background: var(--paper-bg); }
+html { height: 100%; background: var(--paper-bg); }
 
 body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   margin: 0;
   min-width: 0;
-  min-height: 100vh;
-  overflow-x: hidden;
-  background:
-    linear-gradient(rgba(74, 51, 36, 0.025) 1px, transparent 1px),
-    var(--paper-bg);
-  background-size: 100% 28px;
+  overflow: hidden;
+  background: var(--paper-bg);
 }
 
 button, textarea { font: inherit; }
 button { cursor: pointer; }
 
+/* 应用外壳：顶部与 composer 固定，只有 main 内部滚动 */
+main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: linear-gradient(rgba(74, 51, 36, 0.025) 1px, transparent 1px);
+  background-size: 100% 28px;
+}
+
 .app-top {
-  position: sticky;
-  top: 0;
+  flex: none;
   z-index: 8;
   background: var(--paper-bg);
   box-shadow: 0 6px 18px rgba(74, 51, 36, 0.07);
 }
 
-.header { padding: 15px 14px 11px; }
-.brand-row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+.header { padding: 12px 14px 11px; }
+.header-top { display: flex; align-items: center; gap: 8px; }
+.cache-button {
+  margin-left: auto;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
 }
+.cache-button:hover:not(:disabled) { color: var(--ink); background: var(--surface); }
+.cache-button:disabled { opacity: 0.45; cursor: default; }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--surface-strong);
-  background: var(--terracotta);
-  border-radius: 10px 10px 10px 3px;
-  transform: rotate(-1.5deg);
-}
-
-.brand-mark svg { width: 23px; height: 23px; }
-.brand-mark path { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.brand-mark path:last-child { fill: currentColor; stroke: none; }
-.brand-copy { min-width: 0; }
-
-.eyebrow {
-  color: var(--terracotta-dark);
-  font: 700 9px/1.2 ui-monospace, "Cascadia Mono", monospace;
-  letter-spacing: 0.11em;
-}
-
-h1, h2 {
+h2 {
   font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
   color: var(--ink);
-}
-
-h1 {
-  margin: 4px 0 0;
-  overflow: hidden;
-  font-size: 15px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .status-chip {

@@ -10,7 +10,11 @@ import sys
 from pathlib import Path
 
 from learning_service import (
+    cache_cleanup_status,
+    cleanup_uncommitted_cache,
+    delete_unreferenced_screenshots,
     fetch_transcript,
+    load_cached_records,
     load_cached_transcript,
     save_study_note,
     store_screenshot,
@@ -18,7 +22,26 @@ from learning_service import (
 )
 
 
-VAULT = Path(__file__).resolve().parents[4]
+def resolve_vault() -> Path:
+    # 安装脚本可写入 vault-path.txt 指定知识库根目录；否则假定 host/ 位于
+    # <vault>/.claudian/tools/youtube-study/host/ 这一默认布局之下。
+    override = Path(__file__).resolve().parent / "vault-path.txt"
+    if override.exists():
+        value = override.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return Path(value).resolve()
+    return Path(__file__).resolve().parents[4]
+
+
+VAULT = resolve_vault()
+
+
+def compact_transcript(transcript: list[dict]) -> list[dict]:
+    # Chrome 限制 host→extension 单条消息 1 MB；只回传扩展端真正用到的字段。
+    return [
+        {"start": item.get("start") or 0, "text": item.get("text") or ""}
+        for item in transcript
+    ]
 
 
 def configure_binary_stdio() -> None:
@@ -53,6 +76,13 @@ def write_message(payload: dict) -> None:
 
 def handle(message: dict) -> dict:
     action = message.get("action")
+    if action == "cache_status":
+        return {"ok": True, **cache_cleanup_status(VAULT)}
+    if action == "cleanup_cache":
+        status = cache_cleanup_status(VAULT)
+        removed = cleanup_uncommitted_cache(VAULT)
+        return {"ok": True, **status, "removed": removed}
+    cleanup_uncommitted_cache(VAULT)
     if action == "load_transcript":
         video = message.get("video") or {}
         note_path, transcript = fetch_transcript(VAULT, video)
@@ -61,7 +91,7 @@ def handle(message: dict) -> dict:
             "ok": True,
             "sessionPath": path_value,
             "notePath": path_value,
-            "transcript": transcript,
+            "transcript": compact_transcript(transcript),
         }
     if action == "restore_transcript":
         note_path, transcript = load_cached_transcript(VAULT, message.get("videoId", ""))
@@ -70,8 +100,10 @@ def handle(message: dict) -> dict:
             "ok": True,
             "sessionPath": path_value,
             "notePath": path_value,
-            "transcript": transcript,
+            "transcript": compact_transcript(transcript),
         }
+    if action == "load_records":
+        return {"ok": True, "records": load_cached_records(VAULT, message.get("videoId", ""))}
     if action == "store_screenshot":
         screenshot = store_screenshot(
             VAULT,
@@ -80,6 +112,13 @@ def handle(message: dict) -> dict:
             message.get("time", 0),
         )
         return {"ok": True, "screenshot": screenshot}
+    if action == "delete_screenshots":
+        deleted = delete_unreferenced_screenshots(
+            VAULT,
+            message.get("videoId", ""),
+            message.get("screenshotIds") or [],
+        )
+        return {"ok": True, "deleted": deleted}
     if action == "save_to_vault":
         note_path = save_study_note(
             VAULT,

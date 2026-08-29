@@ -12,6 +12,8 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   } catch (_) {}
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => lastCaptureByTab.delete(tabId));
+
 const lastCaptureByTab = new Map();
 const NATIVE_HOST = "com.lianqian.youtube_study";
 
@@ -45,7 +47,10 @@ function isYouTubeUrl(urlValue) {
 
 chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command !== "save-learning-moment" || !tab?.id) return;
-  await captureForTab(tab.id);
+  const result = await captureForTab(tab.id);
+  if (result && result.ok !== true && !result.duplicate) {
+    console.warn("快捷键保存失败", result.error || result);
+  }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -59,11 +64,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === "FETCH_CAPTION_TRACK" && message.url) {
-    fetchCaptionTrack(message.url).then(sendResponse);
-    return true;
-  }
-
   if (message?.type === "LOAD_TRANSCRIPT") {
     nativeRequest({ action: "load_transcript", video: message.video }).then(sendResponse);
     return true;
@@ -74,6 +74,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "LOAD_RECORDS") {
+    nativeRequest({ action: "load_records", videoId: message.videoId }).then(sendResponse);
+    return true;
+  }
+
   if (message?.type === "STORE_SCREENSHOT") {
     nativeRequest({
       action: "store_screenshot",
@@ -81,6 +86,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       time: message.time,
       imageDataUrl: message.imageDataUrl
     }).then(sendResponse);
+    return true;
+  }
+
+  if (message?.type === "DELETE_SCREENSHOTS") {
+    nativeRequest({
+      action: "delete_screenshots",
+      videoId: message.videoId,
+      screenshotIds: message.screenshotIds
+    }).then(sendResponse);
+    return true;
+  }
+
+  if (message?.type === "CACHE_STATUS") {
+    nativeRequest({ action: "cache_status" }).then(sendResponse);
+    return true;
+  }
+
+  if (message?.type === "CLEANUP_CACHE") {
+    nativeRequest({ action: "cleanup_cache" }).then(sendResponse);
     return true;
   }
 
@@ -108,20 +132,6 @@ async function nativeRequest(payload) {
   }
 }
 
-async function fetchCaptionTrack(url) {
-  try {
-    const response = await fetch(url, { credentials: "include" });
-    return {
-      ok: response.ok,
-      status: response.status,
-      contentType: response.headers.get("content-type") || "",
-      text: await response.text()
-    };
-  } catch (error) {
-    return { ok: false, status: 0, text: "", error: String(error) };
-  }
-}
-
 async function captureForTab(tabId) {
   const now = Date.now();
   if (now - (lastCaptureByTab.get(tabId) || 0) < 600) return { duplicate: true };
@@ -133,17 +143,17 @@ async function captureForTab(tabId) {
     await chrome.sidePanel.open({ tabId });
     const ready = await ensureContentScript(tabId);
     if (!ready.ok) return ready;
-    const key = `draft:${tabId}`;
+    const videoId = ready.state?.video?.videoId;
+    if (!videoId) return { ok: false, error: "尚未读取到当前视频，请稍后再试" };
+    const key = `draft:${tabId}:${videoId}`;
     const stored = await chrome.storage.session.get(key);
     if (stored[key]) {
-      await chrome.storage.session.remove(key);
-      await chrome.tabs.sendMessage(tabId, { type: "RESUME_VIDEO" });
-      chrome.runtime.sendMessage({ type: "DRAFT_CANCELLED", tabId }).catch(() => {});
-      return { ok: true, cancelled: true, resumed: true };
+      chrome.runtime.sendMessage({ type: "DRAFT_READY", tabId, videoId }).catch(() => {});
+      return { ok: true, existingDraft: true };
     }
 
     let draft = await chrome.tabs.sendMessage(tabId, { type: "CAPTURE_MOMENT" });
-    if (!draft?.videoId) return { ok: false };
+    if (!draft?.videoId) return { ok: false, error: "尚未读取到当前视频，请稍后再试" };
     if (!draft.text) {
       const transcriptResult = await chrome.tabs.sendMessage(tabId, { type: "LOAD_TRANSCRIPT" });
       if (transcriptResult?.ok) {
@@ -152,7 +162,7 @@ async function captureForTab(tabId) {
     }
 
     await chrome.storage.session.set({ [key]: draft });
-    chrome.runtime.sendMessage({ type: "DRAFT_READY", tabId }).catch(() => {});
+    chrome.runtime.sendMessage({ type: "DRAFT_READY", tabId, videoId }).catch(() => {});
     return { ok: true };
   } catch (error) {
     console.warn("无法保存当前片段", error);

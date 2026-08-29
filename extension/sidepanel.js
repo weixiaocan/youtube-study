@@ -1,5 +1,4 @@
 const elements = {
-  title: document.querySelector("#video-title"),
   empty: document.querySelector("#empty-state"),
   transcriptPanel: document.querySelector("#transcript-panel"),
   recordsPanel: document.querySelector("#records-panel"),
@@ -9,6 +8,7 @@ const elements = {
   recordCount: document.querySelector("#record-count"),
   saveStatus: document.querySelector("#save-status"),
   saveToVaultButton: document.querySelector("#save-to-vault-button"),
+  cleanCacheButton: document.querySelector("#clean-cache-button"),
   loadTranscriptButton: document.querySelector("#load-transcript-button"),
   loadTranscriptCta: document.querySelector("#load-transcript-cta"),
   transcriptEmpty: document.querySelector("#transcript-empty"),
@@ -30,6 +30,7 @@ let activeTabId = null;
 let state = null;
 let records = [];
 let draft = null;
+let composerVideoId = null;
 let currentTranscriptIndex = -1;
 let activePanel = "transcript";
 let isAddingScreenshots = false;
@@ -51,23 +52,31 @@ async function initialize() {
     if (!ready?.ok) throw new Error(ready?.error || "无法连接 YouTube 页面");
     state = ready.state;
     await renderState();
-    await loadDraft();
   } catch (error) {
     showEmpty(error.message || "无法连接 YouTube 页面");
   }
 }
 
 if (!isPreview) {
+  // 拉取播放时间：面板可见时才向页面查询，页面不再持续推送，service worker 无谓唤醒被消除。
+  setInterval(async () => {
+    if (document.hidden || activePanel !== "transcript") return;
+    if (!activeTabId || !state?.video) return;
+    try {
+      const result = await chrome.tabs.sendMessage(activeTabId, { type: "GET_TIME" });
+      if (result?.videoId === state.video.videoId) updateCurrentTranscript(result.time);
+    } catch (_) {}
+  }, 700);
+
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "VIDEO_STATE_READY") {
       state = message.state;
       renderState();
     }
-    if (message.type === "PLAYBACK_TIME" && message.videoId === state?.video?.videoId) {
-      updateCurrentTranscript(message.time);
-    }
-    if (message.type === "DRAFT_READY" && message.tabId === activeTabId) loadDraft();
-    if (message.type === "DRAFT_CANCELLED" && message.tabId === activeTabId) discardDraft();
+    if (message.type === "DRAFT_READY" && message.tabId === activeTabId
+      && message.videoId === state?.video?.videoId) loadDraft();
+    if (message.type === "DRAFT_CANCELLED" && message.tabId === activeTabId
+      && message.videoId === state?.video?.videoId) discardDraft();
   });
 }
 
@@ -92,6 +101,7 @@ elements.draftNote.addEventListener("keydown", (event) => {
 elements.loadTranscriptButton.addEventListener("click", requestTranscript);
 elements.loadTranscriptCta.addEventListener("click", requestTranscript);
 elements.saveToVaultButton.addEventListener("click", saveToVault);
+elements.cleanCacheButton.addEventListener("click", cleanExpiredCache);
 elements.addScreenshotsButton.addEventListener("click", () => elements.screenshotInput.click());
 elements.screenshotInput.addEventListener("change", () => {
   addScreenshotFiles(elements.screenshotInput.files);
@@ -121,12 +131,17 @@ new ResizeObserver(([entry]) => {
 
 async function renderState() {
   if (!state?.video) return showEmpty("当前页面没有可读取的视频。");
-  if (editingRecordIndex >= 0 && draft?.videoId !== state.video.videoId) {
+  const renderVideoId = state.video.videoId;
+  if (composerVideoId !== renderVideoId) {
+    // 换视频后 composer 跟随新视频：编辑模式退出、草稿视图清空，
+    // 原视频的草稿仍留在 session 存储里，切回时再载入。
     editingRecordIndex = -1;
     draft = null;
     setComposerIdle();
+    composerVideoId = renderVideoId;
+    loadDraft();
   }
-  elements.title.textContent = state.video.title || "YouTube 学习记录";
+  document.title = state.video.title || "YouTube 学习记录";
   elements.empty.classList.add("hidden");
   elements.transcriptPanel.classList.toggle("hidden", activePanel !== "transcript");
   elements.recordsPanel.classList.toggle("hidden", activePanel !== "records");
@@ -164,8 +179,23 @@ async function renderState() {
   }));
 
   if (!isPreview) {
-    const stored = await chrome.storage.local.get(`records:${state.video.videoId}`);
-    records = stored[`records:${state.video.videoId}`] || [];
+    const recordsKey = `records:${renderVideoId}`;
+    const stored = await chrome.storage.local.get(recordsKey);
+    if (state?.video?.videoId !== renderVideoId) return;
+    records = stored[recordsKey] || [];
+    if (!records.length && isSaved) {
+      // 换设备/清过扩展存储后本地为空，但笔记已入库：从 vault 缓存恢复。
+      const restored = await chrome.runtime.sendMessage({
+        type: "LOAD_RECORDS",
+        videoId: renderVideoId
+      }).catch(() => null);
+      if (state?.video?.videoId !== renderVideoId) return;
+      if (restored?.ok && Array.isArray(restored.records) && restored.records.length) {
+        records = restored.records;
+        await chrome.storage.local.set({ [recordsKey]: records });
+        if (state?.video?.videoId !== renderVideoId) return;
+      }
+    }
   }
   renderRecords();
   updateCurrentTranscript(state.currentTime);
@@ -222,7 +252,14 @@ async function requestTranscript() {
   elements.loadTranscriptCta.textContent = "正在获取…";
 
   try {
-    const result = await chrome.tabs.sendMessage(activeTabId, { type: "LOAD_TRANSCRIPT" });
+    // yt-dlp 下载字幕可能耗时很久，超时后避免按钮永远停在「获取中…」。
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject({ timeout: true }), 130_000);
+    });
+    const result = await Promise.race([
+      chrome.tabs.sendMessage(activeTabId, { type: "LOAD_TRANSCRIPT" }),
+      timeout,
+    ]);
     if (!result?.ok) {
       showToast(result?.error || "没有获取到字幕");
       return;
@@ -235,8 +272,8 @@ async function requestTranscript() {
     state.sessionPath = result.sessionPath || "";
     await renderState();
     showToast(`已获取 ${result.transcript.length} 条字幕`);
-  } catch (_) {
-    showToast("字幕获取失败，请刷新页面重试");
+  } catch (error) {
+    showToast(error?.timeout ? "获取字幕超时（本地服务无响应）" : "字幕获取失败，请刷新页面重试");
   } finally {
     elements.loadTranscriptButton.disabled = false;
     elements.loadTranscriptCta.disabled = false;
@@ -265,9 +302,41 @@ async function saveToVault() {
   }
 }
 
+async function cleanExpiredCache() {
+  elements.cleanCacheButton.disabled = true;
+  try {
+    const status = await chrome.runtime.sendMessage({ type: "CACHE_STATUS" });
+    if (!status?.ok) throw new Error(status?.error || "无法读取缓存状态");
+    if (!status.removableCount) {
+      showToast("没有需要清理的过期缓存");
+      return;
+    }
+    const size = formatBytes(status.removableBytes || 0);
+    const approved = confirm(
+      `将删除 ${status.removableCount} 个超过 30 天或超出最近 50 个上限的未入库缓存（约 ${size}）。已入库内容不会删除。是否继续？`
+    );
+    if (!approved) return;
+    const result = await chrome.runtime.sendMessage({ type: "CLEANUP_CACHE" });
+    if (!result?.ok) throw new Error(result?.error || "缓存清理失败");
+    showToast(`已清理 ${result.removed?.length || 0} 个过期缓存，释放约 ${formatBytes(result.removableBytes || 0)}`);
+  } catch (error) {
+    showToast(error.message || "缓存清理失败");
+  } finally {
+    elements.cleanCacheButton.disabled = false;
+  }
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function loadDraft() {
-  if (!activeTabId || editingRecordIndex >= 0) return;
-  const key = `draft:${activeTabId}`;
+  if (isPreview) return;
+  if (!activeTabId || editingRecordIndex >= 0 || !state?.video?.videoId) return;
+  const key = `draft:${activeTabId}:${state.video.videoId}`;
   const stored = await chrome.storage.session.get(key);
   if (!stored[key]) return;
   draft = stored[key];
@@ -280,41 +349,52 @@ async function saveDraft() {
   const record = { ...draft, note: elements.draftNote.value.trim() };
   if (editingRecordIndex >= 0) {
     records[editingRecordIndex] = record;
-    await persistRecords(record.videoId);
+    const syncError = await persistRecords(record.videoId);
     editingRecordIndex = -1;
     draft = null;
     setComposerIdle();
     renderRecords();
-    showToast("笔记修改已保存");
+    showToast(syncError ? `修改已在本地保存，但同步失败：${syncError}` : "笔记修改已保存");
     return;
   }
-  records.push(record);
-  await persistRecords(draft.videoId);
+  const targetVideoId = record.videoId || state?.video?.videoId;
+  if (targetVideoId === state?.video?.videoId) {
+    records.push(record);
+    const syncError = await persistRecords(targetVideoId);
+    renderRecords();
+    showToast(syncError ? `记录已在本地保存，但同步知识库失败：${syncError}` : "学习记录已保存");
+  } else {
+    // 草稿是视频 A 的，但页面已切到视频 B：写回 A 自己的列表，不污染 B。
+    const syncError = await appendRecordToVideo(targetVideoId, record);
+    showToast(syncError ? `已保存到原视频的本地记录，但同步失败：${syncError}` : "已保存到原视频的记录，切回该视频可查看");
+  }
   await clearDraft(true);
-  renderRecords();
-  showToast("学习记录已保存");
 }
 
 async function cancelDraft() {
   if (editingRecordIndex >= 0) {
+    await cleanupTransientScreenshots(draft?.videoId);
     editingRecordIndex = -1;
     draft = null;
     setComposerIdle();
     showToast("已取消修改");
     return;
   }
+  await cleanupTransientScreenshots(draft?.videoId);
   await clearDraft(true);
 }
 
 function discardDraft() {
   if (editingRecordIndex >= 0) return;
+  cleanupTransientScreenshots(draft?.videoId).catch(() => {});
   draft = null;
   setComposerIdle();
   showToast("已取消本次记录");
 }
 
 async function clearDraft(resume) {
-  await chrome.storage.session.remove(`draft:${activeTabId}`);
+  const videoId = draft?.videoId || state?.video?.videoId;
+  if (videoId) await chrome.storage.session.remove(`draft:${activeTabId}:${videoId}`);
   draft = null;
   setComposerIdle();
   if (resume) chrome.tabs.sendMessage(activeTabId, { type: "RESUME_VIDEO" }).catch(() => {});
@@ -339,7 +419,7 @@ function setComposerIdle() {
 
 function persistDraft() {
   if (!draft || editingRecordIndex >= 0 || isPreview) return;
-  chrome.storage.session.set({ [`draft:${activeTabId}`]: draft }).catch(() => {});
+  chrome.storage.session.set({ [`draft:${activeTabId}:${draft.videoId}`]: draft }).catch(() => {});
 }
 
 function showDraftEditor() {
@@ -375,12 +455,28 @@ function startEditingRecord(index) {
 
 async function persistRecords(videoId) {
   await chrome.storage.local.set({ [`records:${videoId}`]: records });
-  if (!state?.sessionPath) return;
-  await chrome.runtime.sendMessage({
+  if (!state?.sessionPath) return null;
+  return syncRecordsToVault(videoId, records);
+}
+
+async function appendRecordToVideo(videoId, record) {
+  const key = `records:${videoId}`;
+  const stored = await chrome.storage.local.get(key);
+  const target = Array.isArray(stored[key]) ? stored[key] : [];
+  target.push(record);
+  await chrome.storage.local.set({ [key]: target });
+  if (!record.sessionPath) return null;
+  return syncRecordsToVault(videoId, target);
+}
+
+// 返回 null 表示同步成功（或无需同步），否则返回可展示的错误信息。
+async function syncRecordsToVault(videoId, list) {
+  const result = await chrome.runtime.sendMessage({
     type: "SYNC_STUDY_RECORDS",
     videoId,
-    records
-  }).catch(() => {});
+    records: list
+  }).catch(() => null);
+  return result?.ok ? null : (result?.error || "本地连接器无响应，笔记未同步");
 }
 
 async function addScreenshotFiles(fileList) {
@@ -472,14 +568,31 @@ function renderDraftScreenshots() {
     remove.setAttribute("aria-label", `移除截图 ${index + 1}`);
     remove.textContent = "×";
     remove.addEventListener("click", () => {
+      const wasTransient = screenshotPreviews.has(screenshot.id);
       screenshotPreviews.delete(screenshot.id);
       draft.screenshots.splice(index, 1);
       persistDraft();
       renderDraftScreenshots();
+      if (wasTransient) deleteScreenshots(draft.videoId, [screenshot.id]).catch(() => {});
     });
     item.append(remove);
     return item;
   }));
+}
+
+async function cleanupTransientScreenshots(videoId) {
+  const screenshotIds = [...screenshotPreviews.keys()];
+  if (!videoId || !screenshotIds.length || isPreview) return;
+  await deleteScreenshots(videoId, screenshotIds);
+}
+
+async function deleteScreenshots(videoId, screenshotIds) {
+  const result = await chrome.runtime.sendMessage({
+    type: "DELETE_SCREENSHOTS",
+    videoId,
+    screenshotIds
+  }).catch(() => null);
+  if (!result?.ok) throw new Error(result?.error || "截图缓存清理失败");
 }
 
 function renderRecords() {
@@ -523,8 +636,9 @@ async function deleteRecord(index) {
     setComposerIdle();
   }
   records.splice(index, 1);
-  await persistRecords(state.video.videoId);
+  const syncError = await persistRecords(state.video.videoId);
   renderRecords();
+  if (syncError) showToast(`删除已在本地生效，但同步失败：${syncError}`);
 }
 
 async function seekToRecord(record) {
@@ -565,6 +679,7 @@ function updateCurrentTranscript(time) {
 }
 
 function showEmpty(text) {
+  document.title = "YouTube 学习记录";
   elements.empty.classList.remove("hidden");
   elements.transcriptPanel.classList.add("hidden");
   elements.recordsPanel.classList.add("hidden");

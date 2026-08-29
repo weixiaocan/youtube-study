@@ -11,6 +11,7 @@ const js = fs.readFileSync(path.join(extensionDir, "sidepanel.js"), "utf8");
 test("keeps the interaction hooks used by the extension", () => {
   [
     "save-to-vault-button",
+    "clean-cache-button",
     "load-transcript-button",
     "load-transcript-cta",
     "transcript-list",
@@ -65,5 +66,7 @@ test("avoids browser-default blockquotes and exposes clear save state", () => {
 
 test("developer preview cannot replace normal Chrome initialization", () => {
   assert.match(js, /if \(isPreview\) initializePreview\(\);\s*else initialize\(\);/);
-  assert.match(js, /if \(!isPreview\) \{\s*chrome\.runtime\.onMessage/);
+  assert.match(js, /if \(!isPreview\) \{[\s\S]{0,1200}?chrome\.runtime\.onMessage/);
+  assert.match(js, /type: "GET_TIME"/);
+  assert.doesNotMatch(js, /PLAYBACK_TIME/);
 });

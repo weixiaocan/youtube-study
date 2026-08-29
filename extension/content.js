@@ -4,7 +4,6 @@ let videoInfo = null;
 let transcript = [];
 let lastUrl = location.href;
 let sessionPath = "";
-const pendingCaptionRequests = new Map();
 
 injectBridge();
 requestPlayerData();
@@ -23,17 +22,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("message", (event) => {
   const message = event.data;
   if (event.source !== window || message?.source !== BRIDGE_SOURCE) return;
-
-  if (message.type === "CAPTION_TRACK_RESULT") {
-    const pending = pendingCaptionRequests.get(message.requestId);
-    if (pending) {
-      clearTimeout(pending.timeoutId);
-      pendingCaptionRequests.delete(message.requestId);
-      pending.resolve(message.payload);
-    }
-    return;
-  }
-
+  if (event.origin !== location.origin) return;
   if (message.type !== "PLAYER_DATA") return;
   if (!message.payload?.videoId) return;
   const pageVideoId = new URL(location.href).searchParams.get("v");
@@ -62,6 +51,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
 
+  if (message?.type === "GET_TIME") {
+    sendResponse({ time: document.querySelector("video")?.currentTime || 0, videoId: videoInfo?.videoId || "" });
+    return;
+  }
+
   if (message?.type === "CAPTURE_MOMENT") {
     sendResponse(captureMoment());
     return;
@@ -84,7 +78,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sessionPath,
         error: result.error || ""
       });
-    });
+    }).catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
@@ -95,7 +89,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         notifyState();
       }
       sendResponse(result);
-    });
+    }).catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
@@ -113,15 +107,6 @@ setInterval(() => {
     sessionPath = "";
     notifyState();
     setTimeout(requestPlayerData, 500);
-  }
-
-  const video = document.querySelector("video");
-  if (videoInfo && video && !video.paused) {
-    chrome.runtime.sendMessage({
-      type: "PLAYBACK_TIME",
-      time: video.currentTime,
-      videoId: videoInfo.videoId
-    }).catch(() => {});
   }
 }, 500);
 
@@ -172,97 +157,7 @@ async function saveToVault(records) {
 }
 
 function requestPlayerData() {
-  window.postMessage({ source: BRIDGE_SOURCE, type: "REQUEST_PLAYER_DATA" }, "*");
-}
-
-async function loadTranscript(tracks) {
-  if (!tracks?.length) return [];
-  const preferred = tracks.find((track) => track.languageCode?.startsWith("zh"))
-    || tracks.find((track) => track.languageCode?.startsWith("en"))
-    || tracks[0];
-
-  try {
-    const originalResult = await requestCaptionFromPage(preferred.baseUrl);
-    let items = parseJson3Transcript(originalResult?.text || "");
-    if (!items.length) items = parseXmlTranscript(originalResult?.text || "");
-    if (items.length) return items;
-
-    const jsonUrl = new URL(preferred.baseUrl);
-    jsonUrl.searchParams.set("fmt", "json3");
-    const jsonResult = await requestCaptionFromPage(jsonUrl.toString());
-    items = parseJson3Transcript(jsonResult?.text || "");
-    if (!items.length) items = parseXmlTranscript(jsonResult?.text || "");
-    if (items.length) return items;
-
-    const fallbackResult = await chrome.runtime.sendMessage({
-      type: "FETCH_CAPTION_TRACK",
-      url: preferred.baseUrl
-    });
-    items = parseJson3Transcript(fallbackResult?.text || "");
-    if (!items.length) items = parseXmlTranscript(fallbackResult?.text || "");
-    if (items.length) return items;
-
-    throw new Error(`字幕响应为空：page=${originalResult?.status || 0}, json=${jsonResult?.status || 0}, fallback=${fallbackResult?.status || 0}`);
-  } catch (error) {
-    console.warn("字幕加载失败", error);
-    return [];
-  }
-}
-
-function requestCaptionFromPage(url) {
-  return new Promise((resolve) => {
-    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const timeoutId = setTimeout(() => {
-      pendingCaptionRequests.delete(requestId);
-      resolve({ ok: false, status: 0, text: "", error: "timeout" });
-    }, 10000);
-    pendingCaptionRequests.set(requestId, { resolve, timeoutId });
-    window.postMessage({
-      source: BRIDGE_SOURCE,
-      type: "FETCH_CAPTION_TRACK",
-      requestId,
-      url
-    }, "*");
-  });
-}
-
-function parseJson3Transcript(text) {
-  try {
-    const data = JSON.parse(text);
-    return (data.events || [])
-      .filter((event) => event.segs?.length)
-      .map((event, index) => ({
-        id: index,
-        start: (event.tStartMs || 0) / 1000,
-        duration: (event.dDurationMs || 0) / 1000,
-        text: event.segs.map((segment) => segment.utf8 || "").join("").replace(/\n/g, " ").trim()
-      }))
-      .filter((item) => item.text);
-  } catch (_) {
-    return [];
-  }
-}
-
-function parseXmlTranscript(text) {
-  try {
-    const documentNode = new DOMParser().parseFromString(text, "text/xml");
-    return [...documentNode.querySelectorAll("text, p")]
-      .map((node, index) => {
-        const start = Number(node.getAttribute("start") || 0);
-        const duration = Number(node.getAttribute("dur") || 0);
-        const timeMs = Number(node.getAttribute("t") || 0);
-        const durationMs = Number(node.getAttribute("d") || 0);
-        return {
-          id: index,
-          start: start || timeMs / 1000,
-          duration: duration || durationMs / 1000,
-          text: (node.textContent || "").replace(/\s+/g, " ").trim()
-        };
-      })
-      .filter((item) => item.text);
-  } catch (_) {
-    return [];
-  }
+  window.postMessage({ source: BRIDGE_SOURCE, type: "REQUEST_PLAYER_DATA" }, location.origin);
 }
 
 function captureMoment() {
@@ -298,15 +193,22 @@ function buildSemanticSegment(index) {
 
   while (start > 0 && start > index - 3 && !sentenceEnd.test(transcript[start - 1].text)) {
     start -= 1;
-    text = `${transcript[start].text} ${text}`;
+    text = joinText(transcript[start].text, text);
   }
 
   while (end < transcript.length - 1 && end < index + 3 && !sentenceEnd.test(text)) {
     end += 1;
-    text = `${text} ${transcript[end].text}`;
+    text = joinText(text, transcript[end].text);
   }
 
   return { text: text.replace(/\s+/g, " ").trim(), start: transcript[start].start };
+}
+
+function joinText(left, right) {
+  const CJK_EDGE = "[\\u3000-\\u303f\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef]";
+  const adjacent = new RegExp(CJK_EDGE + "$").test(left.slice(-1))
+    && new RegExp("^" + CJK_EDGE).test(right.slice(0, 1));
+  return adjacent ? `${left}${right}` : `${left} ${right}`;
 }
 
 function findCurrentIndex(time) {

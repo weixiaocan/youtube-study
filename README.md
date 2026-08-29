@@ -27,7 +27,7 @@ YouTube 页面
 ## 当前工作流
 
 1. 打开 YouTube 视频不会自动写入知识库。
-2. 点击“获取字幕”只下载并写入 `.claudian/cache/youtube-study` 隐藏缓存。再次回到同一视频时，侧边栏会自动恢复已有缓存，不会重新下载。
+2. 点击“获取字幕”只下载视频已有字幕并写入 `.claudian/cache/youtube-study` 隐藏缓存。优先英文，其次中文，再回退到其他已有语言；不会执行语音转写。再次回到同一视频时，侧边栏会自动恢复已有缓存，不会重新下载。
 3. 使用 `Alt+N` 记录当前时间点的想法；未入库前记录保存在 Chrome 本地存储。
 4. 一条记录可以选择、拖入或粘贴多张截图；截图先进入隐藏缓存。
 5. 已保存的记录可以再次编辑文字、追加或移除截图；点击时间按钮可以让原视频跳回对应位置。
@@ -42,8 +42,8 @@ YouTube 页面
 
 ```powershell
 $PythonExe = "完整 Python 可执行文件路径"
-& $PythonExe -m unittest test_learning_service.py
-& $PythonExe -m py_compile learning_service.py native_host.py test_learning_service.py
+& $PythonExe -m unittest test_learning_service.py test_native_host.py
+& $PythonExe -m py_compile learning_service.py native_host.py test_learning_service.py test_native_host.py
 ```
 
 在 `extension` 目录运行：
@@ -52,7 +52,13 @@ $PythonExe = "完整 Python 可执行文件路径"
 node --check background.js
 node --check content.js
 node --check sidepanel.js
-node --test ..\\tests\\sidepanel-ui.test.js
+node --test ..\\tests\\sidepanel-ui.test.js ..\\tests\\sidepanel-behavior.test.js ..\\tests\\background-shortcut.test.js ..\\tests\\content-transcript-cache.test.js
+```
+
+在仓库根目录验证安装脚本（只使用临时目录，不修改注册表）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\tests\\install.test.ps1
 ```
 
 修改扩展后还需要在 `chrome://extensions` 中点击“重新加载”，刷新 YouTube 页面并进行一次真实视频验证。
@@ -67,10 +73,23 @@ node --test ..\\tests\\sidepanel-ui.test.js
 ```powershell
 & ".\host\install.ps1" `
   -ExtensionId "浏览器中显示的扩展 ID" `
-  -PythonExe "完整 Python 可执行文件路径"
+  -PythonExe "完整 Python 可执行文件路径" `
+  -VaultPath "Obsidian 知识库根目录"   # 可选
 ```
 
 安装脚本把 Python 绝对路径写入被 Git 忽略的 `host/python-path.txt`。仓库只保存读取该配置的通用启动脚本，不保存个人机器路径。
+安装时会先验证该 Python 能导入 Native Host 所需的标准库；如果自动检测到的运行时不完整，请通过 `-PythonExe` 指定一套完整的 Python 3。
+
+`-VaultPath` 同样是可选的：默认假定本仓库位于 `<知识库>/.claudian/tools/youtube-study`；如果放在其他位置，脚本会把绝对路径写入被 Git 忽略的 `host/vault-path.txt`，本机连接器优先读取它。
+
+重新运行安装脚本时省略 `-VaultPath` 会删除旧的路径覆盖并恢复默认布局。
+
+## 缓存生命周期
+
+- 已入库视频的缓存用于恢复侧栏和同步记录，不自动删除。
+- 从未入库的缓存最多保留 30 天，并最多保留最近 50 个视频；本地连接器使用时会自动清理超期或超量项目。
+- 侧栏“清理过期缓存”会先显示数量和预计空间，确认后只删除符合上述条件的未入库缓存。
+- 取消草稿、移除截图或删除记录时，会清理不再被记录引用的受管截图；正式 Markdown 不会被缓存清理删除。
 
 安装后可以用浏览器扩展详情页显示的 ID 检查 Native Messaging 授权：
 
