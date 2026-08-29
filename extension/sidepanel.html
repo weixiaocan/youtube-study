@@ -73,7 +73,7 @@
       <div class="composer-topline">
         <div class="composer-heading">
           <span class="composer-dot" aria-hidden="true"></span>
-          <span>记录此刻</span>
+          <span id="composer-title">记录此刻</span>
         </div>
         <span id="draft-time" class="time-chip"></span>
       </div>
@@ -90,7 +90,10 @@
       <textarea id="draft-note" rows="3" placeholder="这里写你的理解、问题或灵感……"></textarea>
       <div class="composer-actions">
         <span class="keyboard-hint"><kbd>Enter</kbd> 保存　<kbd>Alt</kbd> + <kbd>N</kbd> 快速记录</span>
-        <button id="save-button">保存笔记</button>
+        <div class="composer-action-buttons">
+          <button id="cancel-edit-button" class="cancel-edit-button hidden">取消</button>
+          <button id="save-button">保存笔记</button>
+        </div>
       </div>
     </section>
 

@@ -12,10 +12,53 @@ from learning_service import (
     load_cached_transcript,
     save_study_note,
     store_screenshot,
+    sync_records,
 )
 
 
 class ManualSaveTest(unittest.TestCase):
+    def test_editing_a_saved_record_updates_text_and_screenshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            video_id = "edit12345"
+            metadata = {
+                "videoId": video_id,
+                "title": "Editable lesson",
+                "author": "Example Creator",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+            }
+            cache = cache_dir(vault, video_id)
+            atomic_json(cache / "metadata.json", metadata)
+            atomic_json(
+                cache / "transcript.json",
+                [{"id": 0, "start": 12.0, "duration": 2.0, "text": "Original source text."}],
+            )
+            note = save_study_note(
+                vault,
+                video_id,
+                [{"timestamp": "0:12", "text": "Original source text.", "note": "Old note."}],
+            )
+            payload = b"\x89PNG\r\n\x1a\nupdated-image"
+            data_url = "data:image/png;base64," + base64.b64encode(payload).decode()
+            screenshot = store_screenshot(vault, video_id, data_url, 12)
+
+            sync_records(
+                vault,
+                video_id,
+                [{
+                    "timestamp": "0:12",
+                    "time": 12,
+                    "text": "Original source text.",
+                    "note": "Updated note.",
+                    "screenshots": [screenshot],
+                }],
+            )
+
+            text = note.read_text(encoding="utf-8")
+            self.assertIn("Updated note.", text)
+            self.assertNotIn("Old note.", text)
+            self.assertIn("![[原始材料/_附件/youtube-study/", text)
+
     def test_multiple_screenshots_stay_hidden_until_note_save(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)

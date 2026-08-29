@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube 学习记录",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "在侧边栏同步 YouTube 字幕，并把字幕和时间戳记录保存到一篇 Obsidian 笔记。",
   "permissions": ["sidePanel", "storage", "tabs", "nativeMessaging", "scripting"],
   "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*"],

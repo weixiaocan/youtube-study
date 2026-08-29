@@ -13,6 +13,7 @@ const elements = {
   loadTranscriptCta: document.querySelector("#load-transcript-cta"),
   transcriptEmpty: document.querySelector("#transcript-empty"),
   composer: document.querySelector("#composer"),
+  composerTitle: document.querySelector("#composer-title"),
   draftTime: document.querySelector("#draft-time"),
   draftText: document.querySelector("#draft-text"),
   draftNote: document.querySelector("#draft-note"),
@@ -20,6 +21,7 @@ const elements = {
   screenshotInput: document.querySelector("#screenshot-input"),
   screenshotHint: document.querySelector("#screenshot-hint"),
   screenshotPreviewList: document.querySelector("#screenshot-preview-list"),
+  cancelEditButton: document.querySelector("#cancel-edit-button"),
   saveButton: document.querySelector("#save-button"),
   toast: document.querySelector("#toast")
 };
@@ -31,6 +33,7 @@ let draft = null;
 let currentTranscriptIndex = -1;
 let activePanel = "transcript";
 let isAddingScreenshots = false;
+let editingRecordIndex = -1;
 const screenshotPreviews = new Map();
 const isPreview = new URLSearchParams(window.location.search).has("preview");
 
@@ -73,6 +76,7 @@ document.querySelectorAll(".tab").forEach((button) => {
 });
 
 elements.saveButton.addEventListener("click", saveDraft);
+elements.cancelEditButton.addEventListener("click", cancelDraft);
 elements.draftNote.addEventListener("input", () => {
   if (!draft) return;
   draft.note = elements.draftNote.value;
@@ -117,6 +121,11 @@ new ResizeObserver(([entry]) => {
 
 async function renderState() {
   if (!state?.video) return showEmpty("当前页面没有可读取的视频。");
+  if (editingRecordIndex >= 0 && draft?.videoId !== state.video.videoId) {
+    editingRecordIndex = -1;
+    draft = null;
+    setComposerIdle();
+  }
   elements.title.textContent = state.video.title || "YouTube 学习记录";
   elements.empty.classList.add("hidden");
   elements.transcriptPanel.classList.toggle("hidden", activePanel !== "transcript");
@@ -184,7 +193,8 @@ function initializePreview() {
     timestamp: "01:16",
     time: 76,
     text: "A useful learning system should help you notice, connect, and retrieve ideas.",
-    note: "知识库不应该只是收藏夹。保存时要补一句：它改变了我什么判断？"
+    note: "知识库不应该只是收藏夹。保存时要补一句：它改变了我什么判断？",
+    screenshots: [{ id: "0000076000-preview001.webp" }]
   }];
   renderState().then(() => {
     draft = {
@@ -256,44 +266,48 @@ async function saveToVault() {
 }
 
 async function loadDraft() {
-  if (!activeTabId) return;
+  if (!activeTabId || editingRecordIndex >= 0) return;
   const key = `draft:${activeTabId}`;
   const stored = await chrome.storage.session.get(key);
   if (!stored[key]) return;
   draft = stored[key];
   draft.screenshots = Array.isArray(draft.screenshots) ? draft.screenshots : [];
-  elements.draftTime.textContent = draft.timestamp;
-  elements.draftText.textContent = draft.text || "当前没有可读取的字幕，你仍可以记录想法。";
-  elements.draftNote.value = draft.note || "";
-  elements.draftNote.disabled = false;
-  elements.addScreenshotsButton.disabled = false;
-  elements.saveButton.disabled = false;
-  renderDraftScreenshots();
-  elements.draftNote.focus();
+  showDraftEditor();
 }
 
 async function saveDraft() {
   if (!draft) return;
   const record = { ...draft, note: elements.draftNote.value.trim() };
-  records.push(record);
-  await chrome.storage.local.set({ [`records:${draft.videoId}`]: records });
-  if (state?.sessionPath) {
-    chrome.runtime.sendMessage({
-      type: "SYNC_STUDY_RECORDS",
-      videoId: draft.videoId,
-      records
-    }).catch(() => {});
+  if (editingRecordIndex >= 0) {
+    records[editingRecordIndex] = record;
+    await persistRecords(record.videoId);
+    editingRecordIndex = -1;
+    draft = null;
+    setComposerIdle();
+    renderRecords();
+    showToast("笔记修改已保存");
+    return;
   }
+  records.push(record);
+  await persistRecords(draft.videoId);
   await clearDraft(true);
   renderRecords();
   showToast("学习记录已保存");
 }
 
 async function cancelDraft() {
+  if (editingRecordIndex >= 0) {
+    editingRecordIndex = -1;
+    draft = null;
+    setComposerIdle();
+    showToast("已取消修改");
+    return;
+  }
   await clearDraft(true);
 }
 
 function discardDraft() {
+  if (editingRecordIndex >= 0) return;
   draft = null;
   setComposerIdle();
   showToast("已取消本次记录");
@@ -307,12 +321,16 @@ async function clearDraft(resume) {
 }
 
 function setComposerIdle() {
+  elements.composer.classList.remove("editing");
+  elements.composerTitle.textContent = "记录此刻";
   elements.draftTime.textContent = "待记录";
   elements.draftText.textContent = "按 Alt+N 暂停视频并定位当前字幕，然后在这里写笔记。";
   elements.draftNote.value = "";
   elements.draftNote.disabled = true;
   elements.addScreenshotsButton.disabled = true;
   elements.saveButton.disabled = true;
+  elements.saveButton.textContent = "保存笔记";
+  elements.cancelEditButton.classList.add("hidden");
   elements.screenshotHint.textContent = "支持多选、拖入或粘贴";
   elements.screenshotPreviewList.replaceChildren();
   elements.screenshotPreviewList.classList.add("hidden");
@@ -320,8 +338,49 @@ function setComposerIdle() {
 }
 
 function persistDraft() {
-  if (!draft || isPreview) return;
+  if (!draft || editingRecordIndex >= 0 || isPreview) return;
   chrome.storage.session.set({ [`draft:${activeTabId}`]: draft }).catch(() => {});
+}
+
+function showDraftEditor() {
+  elements.composer.classList.toggle("editing", editingRecordIndex >= 0);
+  elements.composerTitle.textContent = editingRecordIndex >= 0 ? "编辑学习笔记" : "记录此刻";
+  elements.draftTime.textContent = draft.timestamp;
+  elements.draftText.textContent = draft.text || "当前没有可读取的字幕，你仍可以记录想法。";
+  elements.draftNote.value = draft.note || "";
+  elements.draftNote.disabled = false;
+  elements.addScreenshotsButton.disabled = false;
+  elements.saveButton.disabled = false;
+  elements.saveButton.textContent = editingRecordIndex >= 0 ? "保存修改" : "保存笔记";
+  elements.cancelEditButton.classList.toggle("hidden", editingRecordIndex < 0);
+  renderDraftScreenshots();
+  elements.draftNote.focus();
+}
+
+function startEditingRecord(index) {
+  if (draft && editingRecordIndex < 0 && !isPreview) {
+    showToast("请先保存或取消当前正在记录的笔记");
+    return;
+  }
+  const record = records[index];
+  if (!record) return;
+  editingRecordIndex = index;
+  draft = {
+    ...record,
+    screenshots: (record.screenshots || []).map((screenshot) => ({ ...screenshot }))
+  };
+  showDraftEditor();
+  showToast("已进入编辑模式");
+}
+
+async function persistRecords(videoId) {
+  await chrome.storage.local.set({ [`records:${videoId}`]: records });
+  if (!state?.sessionPath) return;
+  await chrome.runtime.sendMessage({
+    type: "SYNC_STUDY_RECORDS",
+    videoId,
+    records
+  }).catch(() => {});
 }
 
 async function addScreenshotFiles(fileList) {
@@ -438,8 +497,11 @@ function renderRecords() {
     article.className = "record";
     article.innerHTML = `
       <div class="record-header">
-        <button class="record-time">${escapeHtml(record.timestamp)}</button>
-        <button class="delete-button" aria-label="删除记录">删除</button>
+        <button class="record-time" title="跳转到视频 ${escapeHtml(record.timestamp)}">${escapeHtml(record.timestamp)}</button>
+        <div class="record-actions">
+          <button class="edit-button" aria-label="编辑记录">编辑</button>
+          <button class="delete-button" aria-label="删除记录">删除</button>
+        </div>
       </div>
       <div class="record-quote"></div>
       ${record.note ? "<div class=\"record-note\"></div>" : ""}
@@ -447,23 +509,35 @@ function renderRecords() {
     `;
     article.querySelector(".record-quote").textContent = record.text || "（无字幕）";
     article.querySelector(".record-note")?.append(document.createTextNode(record.note));
-    article.querySelector(".record-time").addEventListener("click", () => chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: record.time }));
+    article.querySelector(".record-time").addEventListener("click", () => seekToRecord(record));
+    article.querySelector(".edit-button").addEventListener("click", () => startEditingRecord(index));
     article.querySelector(".delete-button").addEventListener("click", () => deleteRecord(index));
     return article;
   }));
 }
 
 async function deleteRecord(index) {
-  records.splice(index, 1);
-  await chrome.storage.local.set({ [`records:${state.video.videoId}`]: records });
-  if (state?.sessionPath) {
-    chrome.runtime.sendMessage({
-      type: "SYNC_STUDY_RECORDS",
-      videoId: state.video.videoId,
-      records
-    }).catch(() => {});
+  if (editingRecordIndex >= 0) {
+    editingRecordIndex = -1;
+    draft = null;
+    setComposerIdle();
   }
+  records.splice(index, 1);
+  await persistRecords(state.video.videoId);
   renderRecords();
+}
+
+async function seekToRecord(record) {
+  try {
+    const result = await chrome.tabs.sendMessage(activeTabId, {
+      type: "SEEK_TO",
+      seconds: record.time
+    });
+    if (!result?.ok) throw new Error();
+    showToast(`已跳转到 ${record.timestamp}`);
+  } catch (_) {
+    showToast("无法跳转，请刷新视频页面");
+  }
 }
 
 function switchTab(tab) {

@@ -19,8 +19,19 @@ test("keeps the interaction hooks used by the extension", () => {
     "add-screenshots-button",
     "screenshot-input",
     "screenshot-preview-list",
+    "composer-title",
+    "cancel-edit-button",
     "save-button"
   ].forEach((id) => assert.match(html, new RegExp(`id=["']${id}["']`)));
+});
+
+test("edits an existing record through the shared composer and keeps time seeking", () => {
+  assert.match(js, /function startEditingRecord\(index\)/);
+  assert.match(js, /records\[editingRecordIndex\] = record/);
+  assert.match(js, /textContent = editingRecordIndex >= 0 \? "保存修改" : "保存笔记"/);
+  assert.match(js, /addScreenshotFiles/);
+  assert.match(js, /type: "SEEK_TO",\s*seconds: record\.time/);
+  assert.match(js, /showToast\(`已跳转到 \${record\.timestamp}`\)/);
 });
 
 test("supports several user-provided screenshots without tab capture permissions", () => {
