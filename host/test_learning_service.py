@@ -68,7 +68,7 @@ class ManualSaveTest(unittest.TestCase):
 
             def fake_run(command, **_kwargs):
                 requested_languages = command[command.index("--sub-langs") + 1]
-                if requested_languages == "all":
+                if "zh-Hans" in requested_languages:
                     output_template = Path(command[command.index("--output") + 1])
                     subtitle_path = output_template.parent / "video123.zh-Hans.json3"
                     subtitle_path.write_text(
@@ -78,7 +78,7 @@ class ManualSaveTest(unittest.TestCase):
                 return CompletedProcess(command, 0, "", "")
 
             with patch("learning_service.shutil.which", return_value="yt-dlp"), patch(
-                "learning_service.subprocess.run",
+                "learning_service.run_yt_dlp",
                 side_effect=fake_run,
             ):
                 _, transcript = fetch_transcript(vault, {

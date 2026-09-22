@@ -13,6 +13,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -459,6 +460,93 @@ def load_cached_records(vault: Path, video_id: str) -> list:
     return value if isinstance(value, list) else []
 
 
+def system_proxy() -> str | None:
+    """Return the Windows system HTTP proxy, or None when none is configured.
+
+    yt-dlp 作为浏览器外的独立进程运行，不会自动使用 Chrome 的系统代理；
+    这里读取注册表中的系统代理设置，否则它在受限网络下会直连超时。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as key:
+            enabled = bool(winreg.QueryValueEx(key, "ProxyEnable")[0])
+            server = str(winreg.QueryValueEx(key, "ProxyServer")[0]).strip()
+    except OSError:
+        return None
+    if not enabled or not server:
+        return None
+    # Windows 允许按协议分别指定代理（分号分隔），例如 "http=...;https=..."。
+    by_protocol = {
+        item.split("=", 1)[0].strip(): item.split("=", 1)[1].strip()
+        for item in server.split(";")
+        if "=" in item
+    }
+    if by_protocol:
+        server = (
+            by_protocol.get("https")
+            or by_protocol.get("http")
+            or by_protocol.get("all")
+            or ""
+        ).strip()
+    if not server:
+        return None
+    return server if "://" in server else f"http://{server}"
+
+
+def yt_dlp_proxy_args() -> list[str]:
+    """Build --proxy arguments for yt-dlp.
+
+    环境变量已配置代理时交给 yt-dlp 自行处理（--proxy 会覆盖它们）；
+    否则回退到 Windows 系统代理。
+    """
+    env_proxy = any(
+        os.environ.get(name)
+        for name in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
+    )
+    if env_proxy:
+        return []
+    proxy = system_proxy()
+    return [] if not proxy else ["--proxy", proxy]
+
+
+def run_yt_dlp(command: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run yt-dlp, killing the whole process tree on timeout.
+
+    yt-dlp.exe 是 pip 启动器，会派生真正的 Python 子进程；超时时只杀启动器
+    会让子进程继续握着管道，导致 communicate 永远阻塞。Windows 上必须杀进程树。
+    """
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        creationflags=creationflags,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            process.kill()
+        try:
+            process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        raise RuntimeError("yt-dlp 获取字幕超时，请检查网络或稍后重试")
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]:
     """Fetch and cache a transcript without creating a visible knowledge note."""
     video_id = validate_video_id(video.get("videoId", ""))
@@ -473,15 +561,22 @@ def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]
     if not yt_dlp:
         raise RuntimeError("未找到 yt-dlp，请先安装或加入 PATH")
     url = video.get("url") or f"https://www.youtube.com/watch?v={video_id}"
+    proxy_args = yt_dlp_proxy_args()
     with tempfile.TemporaryDirectory(prefix="youtube-study-") as temp_name:
         output = str(Path(temp_name) / "%(id)s.%(ext)s")
+        # 只请求按 README 优先级需要的语言：英文优先，其次中文。
+        # 请求全部语言（--sub-langs all）会触发 YouTube 429 限流。
         command = [
             yt_dlp, "--no-warnings", "--skip-download", "--write-subs", "--write-auto-subs",
-            "--sub-langs", "all", "--sub-format", "json3", "--output", output, url,
+            "--sub-langs", "en-orig,en,zh-Hans,zh-Hant,zh", "--sub-format", "json3",
+            "--socket-timeout", "20", "--retries", "3",
+            *proxy_args, "--output", output, url,
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        completed = run_yt_dlp(command, timeout=120)
         candidates = sorted(Path(temp_name).glob("*.json3"), key=subtitle_priority)
-        if completed.returncode != 0:
+        if completed.returncode != 0 and not candidates:
+            # 单个语言被限流（HTTP 429）时 yt-dlp 会以非零退出码结束；
+            # 但只要已生成可用的字幕文件，就使用已下载的部分而不是整体报错。
             detail = (completed.stderr or completed.stdout or "没有生成字幕文件").strip()[-800:]
             raise RuntimeError(f"yt-dlp 获取字幕失败：{detail}")
         if not candidates:
