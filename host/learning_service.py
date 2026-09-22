@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -385,6 +386,22 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
                 raise RuntimeError("同名笔记路径已被其他视频占用")
             return note
     url = metadata["url"]
+    thumbnail = download_thumbnail(vault, metadata["videoId"])
+    video_info = [
+        "## 视频信息",
+        "",
+    ]
+    if thumbnail:
+        alt = re.sub(r"[\[\]]", "", title)
+        video_info.extend([
+            f"[![{alt}]({thumbnail})]({url})",
+            "",
+        ])
+    video_info.extend([
+        f"- 频道：{metadata.get('author') or '未知'}",
+        f"- 来源：[YouTube]({url})",
+        "",
+    ])
     content = "\n".join([
         "---",
         'kb_type: "video-note"',
@@ -403,11 +420,7 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
         "",
         f"# {title}",
         "",
-        "## 视频信息",
-        "",
-        f"- 频道：{metadata.get('author') or '未知'}",
-        f"- 来源：[YouTube]({url})",
-        "",
+        *video_info,
         "## 我的记录",
         "",
         RECORDS_START,
@@ -496,6 +509,44 @@ def system_proxy() -> str | None:
     if not server:
         return None
     return server if "://" in server else f"http://{server}"
+
+
+def download_thumbnail(vault: Path, video_id: str) -> str | None:
+    """Download the video thumbnail beside its screenshots.
+
+    Returns the vault-relative POSIX path usable in an Obsidian image embed,
+    or None when the download fails. Failures are silent: the note must still
+    be saved even if the thumbnail cannot be fetched (e.g. offline).
+    """
+    try:
+        video_id = validate_video_id(video_id)
+    except ValueError:
+        return None
+    destination = vault / ATTACHMENTS_REL / video_id / "thumbnail.jpg"
+    if destination.exists():
+        return destination.relative_to(vault).as_posix()
+    proxy = system_proxy()
+    proxy_handler = (
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        if proxy
+        else urllib.request.ProxyHandler({})
+    )
+    request = urllib.request.Request(
+        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    try:
+        with urllib.request.build_opener(proxy_handler).open(request, timeout=10) as response:
+            payload = response.read()
+    except (OSError, ValueError):
+        return None
+    if not payload or len(payload) < 1024:
+        return None
+    try:
+        atomic_bytes(destination, payload)
+    except OSError:
+        return None
+    return destination.relative_to(vault).as_posix()
 
 
 def yt_dlp_proxy_args() -> list[str]:

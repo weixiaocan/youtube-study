@@ -184,6 +184,8 @@ async function createSidepanelHarness(options = {}) {
       pendingStorage.get(key).resolve({ [key]: records });
     },
     recordCount() { return element("#record-count").textContent; }
+    ,transcriptRowCount() { return element("#transcript-list").children.length; }
+    ,transcriptSearchValue() { return element("#transcript-search").value; }
     ,async click(selector) { return element(selector).dispatch("click", { preventDefault() {} }); }
     ,tabMessages
     ,runtimeMessages
@@ -302,6 +304,35 @@ test("editing a record can add several screenshots and remove one", async () => 
   await harness.click("#save-button");
   const sync = harness.runtimeMessages.filter((message) => message.type === "SYNC_STUDY_RECORDS").at(-1);
   assert.equal(sync.records[0].screenshots.length, 1);
+});
+
+test("search filters transcript rows and clearing restores them", async () => {
+  const harness = await createSidepanelHarness({
+    initialState: {
+      video: { videoId: "video123", title: "Searchable video" },
+      transcript: [
+        { start: 1, text: "Attention mechanism." },
+        { start: 5, text: "Sparse attention." },
+        { start: 9, text: "Context window." }
+      ],
+      currentTime: 1,
+      sessionPath: ""
+    }
+  });
+
+  assert.equal(harness.transcriptRowCount(), 3);
+
+  harness.setValue("#transcript-search", "attention");
+  await harness.dispatch("#transcript-search", "input");
+  assert.equal(harness.transcriptRowCount(), 2);
+
+  harness.setValue("#transcript-search", "window");
+  await harness.dispatch("#transcript-search", "input");
+  assert.equal(harness.transcriptRowCount(), 1);
+
+  harness.setValue("#transcript-search", "");
+  await harness.dispatch("#transcript-search", "input");
+  assert.equal(harness.transcriptRowCount(), 3);
 });
 
 test("cache cleanup previews expired data and requires confirmation", async () => {

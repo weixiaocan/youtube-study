@@ -3,6 +3,7 @@ const elements = {
   transcriptPanel: document.querySelector("#transcript-panel"),
   recordsPanel: document.querySelector("#records-panel"),
   transcriptList: document.querySelector("#transcript-list"),
+  transcriptSearch: document.querySelector("#transcript-search"),
   recordsList: document.querySelector("#records-list"),
   transcriptCount: document.querySelector("#transcript-count"),
   recordCount: document.querySelector("#record-count"),
@@ -35,6 +36,9 @@ let currentTranscriptIndex = -1;
 let activePanel = "transcript";
 let isAddingScreenshots = false;
 let editingRecordIndex = -1;
+let transcriptFilter = "";
+let lastUserScrollAt = 0;
+let suppressScrollTracking = false;
 const screenshotPreviews = new Map();
 const isPreview = new URLSearchParams(window.location.search).has("preview");
 
@@ -102,6 +106,14 @@ elements.loadTranscriptButton.addEventListener("click", requestTranscript);
 elements.loadTranscriptCta.addEventListener("click", requestTranscript);
 elements.saveToVaultButton.addEventListener("click", saveToVault);
 elements.cleanCacheButton.addEventListener("click", cleanExpiredCache);
+elements.transcriptSearch.addEventListener("input", () => {
+  transcriptFilter = elements.transcriptSearch.value.trim().toLowerCase();
+  renderTranscriptList();
+});
+elements.transcriptList.addEventListener("scroll", () => {
+  if (suppressScrollTracking) return;
+  lastUserScrollAt = Date.now();
+});
 elements.addScreenshotsButton.addEventListener("click", () => elements.screenshotInput.click());
 elements.screenshotInput.addEventListener("change", () => {
   addScreenshotFiles(elements.screenshotInput.files);
@@ -155,28 +167,10 @@ async function renderState() {
   elements.saveToVaultButton.disabled = !hasTranscript || isSaved;
   elements.saveToVaultButton.querySelector("span").textContent = isSaved ? "已保存到知识库" : "保存到知识库";
   elements.transcriptEmpty.classList.toggle("hidden", hasTranscript);
+  elements.transcriptSearch.classList.toggle("hidden", !hasTranscript);
   elements.transcriptList.classList.toggle("hidden", !hasTranscript);
   elements.loadTranscriptButton.querySelector("span").textContent = hasTranscript ? "重新获取" : "获取字幕";
-  elements.transcriptList.replaceChildren(...state.transcript.map((item) => {
-    const row = document.createElement("div");
-    row.className = "transcript-row";
-    row.dataset.start = item.start;
-    row.tabIndex = 0;
-    row.setAttribute("role", "button");
-    row.setAttribute("aria-label", `${formatTime(item.start)}，跳转到此处`);
-    row.innerHTML = `<span class="transcript-time">${formatTime(item.start)}</span><span class="transcript-text"></span>`;
-    row.querySelector(".transcript-text").textContent = item.text;
-    row.addEventListener("click", () => {
-      if (window.getSelection()?.toString()) return;
-      chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
-    });
-    row.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
-    });
-    return row;
-  }));
+  renderTranscriptList();
 
   if (!isPreview) {
     const recordsKey = `records:${renderVideoId}`;
@@ -199,6 +193,37 @@ async function renderState() {
   }
   renderRecords();
   updateCurrentTranscript(state.currentTime);
+}
+
+function renderTranscriptList() {
+  if (!state?.transcript) return;
+  const items = state.transcript
+    .map((item, index) => ({ ...item, index }))
+    .filter((item) => !transcriptFilter || item.text.toLowerCase().includes(transcriptFilter));
+  elements.transcriptList.replaceChildren(...items.map(buildTranscriptRow));
+  updateCurrentTranscript(state.currentTime);
+}
+
+function buildTranscriptRow(item) {
+  const row = document.createElement("div");
+  row.className = "transcript-row";
+  row.dataset.start = item.start;
+  row.dataset.index = item.index;
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", `${formatTime(item.start)}，跳转到此处`);
+  row.innerHTML = `<span class="transcript-time">${formatTime(item.start)}</span><span class="transcript-text"></span>`;
+  row.querySelector(".transcript-text").textContent = item.text;
+  row.addEventListener("click", () => {
+    if (window.getSelection()?.toString()) return;
+    chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
+  });
+  row.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
+  });
+  return row;
 }
 
 function initializePreview() {
@@ -248,6 +273,7 @@ async function requestTranscript() {
   const requestedVideoId = state.video.videoId;
   elements.loadTranscriptButton.disabled = true;
   elements.loadTranscriptCta.disabled = true;
+  elements.loadTranscriptButton.classList.add("loading");
   elements.loadTranscriptButton.querySelector("span").textContent = "获取中…";
   elements.loadTranscriptCta.textContent = "正在获取…";
 
@@ -275,6 +301,7 @@ async function requestTranscript() {
   } catch (error) {
     showToast(error?.timeout ? "获取字幕超时（本地服务无响应）" : "字幕获取失败，请刷新页面重试");
   } finally {
+    elements.loadTranscriptButton.classList.remove("loading");
     elements.loadTranscriptButton.disabled = false;
     elements.loadTranscriptCta.disabled = false;
     elements.loadTranscriptCta.textContent = "获取当前视频字幕";
@@ -285,6 +312,7 @@ async function requestTranscript() {
 async function saveToVault() {
   if (!activeTabId || !state?.transcript?.length || state.sessionPath) return;
   elements.saveToVaultButton.disabled = true;
+  elements.saveToVaultButton.classList.add("loading");
   elements.saveToVaultButton.querySelector("span").textContent = "保存中…";
   try {
     const result = await chrome.tabs.sendMessage(activeTabId, {
@@ -299,6 +327,8 @@ async function saveToVault() {
     elements.saveToVaultButton.disabled = false;
     elements.saveToVaultButton.querySelector("span").textContent = "保存到知识库";
     showToast(error.message || "保存失败");
+  } finally {
+    elements.saveToVaultButton.classList.remove("loading");
   }
 }
 
@@ -671,10 +701,15 @@ function updateCurrentTranscript(time) {
   if (index === currentTranscriptIndex) return;
   currentTranscriptIndex = index;
   document.querySelector(".transcript-row.current")?.classList.remove("current");
-  const row = elements.transcriptList.children[index];
+  const row = elements.transcriptList.querySelector(`[data-index="${index}"]`);
   if (row) {
     row.classList.add("current");
-    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    // 用户正在手动滚动时不要抢滚动；跟随只在当前句变化且用户没有操作时进行。
+    if (Date.now() - lastUserScrollAt > 3000) {
+      suppressScrollTracking = true;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      setTimeout(() => { suppressScrollTracking = false; }, 400);
+    }
   }
 }
 

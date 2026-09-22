@@ -15,6 +15,7 @@ from learning_service import (
     cache_cleanup_status,
     cleanup_uncommitted_cache,
     delete_unreferenced_screenshots,
+    download_thumbnail,
     fetch_transcript,
     load_cached_records,
     load_cached_transcript,
@@ -25,6 +26,11 @@ from learning_service import (
 
 
 class ManualSaveTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # 测试不依赖外网：缩略图下载失败时笔记仍应正常保存。
+        self.thumbnail_patch = patch("learning_service.download_thumbnail", return_value=None)
+        self.thumbnail_patch.start()
+        self.addCleanup(self.thumbnail_patch.stop)
     def test_cache_cleanup_expires_only_unsaved_video_caches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
@@ -420,6 +426,74 @@ class ManualSaveTest(unittest.TestCase):
 
             existing, _ = fetch_transcript(vault, metadata)
             self.assertEqual(existing, saved)
+
+    def test_created_note_embeds_a_clickable_thumbnail_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            video_id = "thumb1234"
+            cache = cache_dir(vault, video_id)
+            atomic_json(cache / "metadata.json", {
+                "videoId": video_id,
+                "title": "Thumbnail lesson",
+                "author": "Example Creator",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "createdAt": "2026-08-29T00:00:00+00:00",
+            })
+            atomic_json(
+                cache / "transcript.json",
+                [{"id": 0, "start": 5.0, "duration": 2.0, "text": "Demo line."}],
+            )
+            thumbnail_path = "原始材料/_附件/youtube-study/thumb1234/thumbnail.jpg"
+
+            with patch("learning_service.download_thumbnail", return_value=thumbnail_path):
+                note = save_study_note(vault, video_id, [{"timestamp": "0:05", "text": "Demo line."}])
+
+            text = note.read_text(encoding="utf-8")
+            self.assertIn(
+                f"[![Thumbnail lesson]({thumbnail_path})](https://www.youtube.com/watch?v={video_id})",
+                text,
+            )
+            self.assertIn("## 视频信息", text)
+
+    def test_note_saves_without_thumbnail_when_download_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            video_id = "nothumb12"
+            cache = cache_dir(vault, video_id)
+            atomic_json(cache / "metadata.json", {
+                "videoId": video_id,
+                "title": "No thumbnail lesson",
+                "author": "Example Creator",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+            })
+            atomic_json(
+                cache / "transcript.json",
+                [{"id": 0, "start": 5.0, "duration": 2.0, "text": "Demo line."}],
+            )
+
+            note = save_study_note(vault, video_id, [])
+
+            text = note.read_text(encoding="utf-8")
+            self.assertNotIn("[![", text)
+            self.assertIn("- 频道：Example Creator", text)
+
+    def test_download_thumbnail_reuses_an_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            destination = vault / ATTACHMENTS_REL / "thumb9999" / "thumbnail.jpg"
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"already-here")
+
+            result = download_thumbnail(vault, "thumb9999")
+
+            self.assertEqual(result, "原始材料/_附件/youtube-study/thumb9999/thumbnail.jpg")
+
+    def test_download_thumbnail_fails_silently_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            vault = Path(temp_name)
+            with patch("learning_service.urllib.request.build_opener", side_effect=OSError("offline")):
+                result = download_thumbnail(vault, "thumb0000")
+            self.assertIsNone(result)
 
 
 if __name__ == "__main__":

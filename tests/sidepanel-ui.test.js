@@ -70,3 +70,13 @@ test("developer preview cannot replace normal Chrome initialization", () => {
   assert.match(js, /type: "GET_TIME"/);
   assert.doesNotMatch(js, /PLAYBACK_TIME/);
 });
+
+test("transcript search filters rows and keeps click-to-seek", () => {
+  assert.match(html, /id="transcript-search"/);
+  assert.match(js, /function renderTranscriptList\(\)/);
+  assert.match(js, /transcriptFilter/);
+  assert.match(js, /buildTranscriptRow/);
+  assert.match(js, /row\.dataset\.index = item\.index/);
+  assert.match(js, /\[data-index="\$\{index\}"\]/);
+  assert.match(js, /type: "SEEK_TO",\s*seconds: item\.start/);
+});
