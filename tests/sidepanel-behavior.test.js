@@ -197,6 +197,9 @@ async function createSidepanelHarness(options = {}) {
     ,async recordAction(index, selector) {
       return element("#records-list").children[index].querySelector(selector).dispatch("click");
     }
+    ,async transcriptRowClick(index) {
+      return element("#transcript-list").children[index].dispatch("click", { preventDefault() {} });
+    }
     ,async draftScreenshotAction(index, selector) {
       return element("#screenshot-preview-list").children[index].querySelector(selector).dispatch("click");
     }
@@ -304,6 +307,34 @@ test("editing a record can add several screenshots and remove one", async () => 
   await harness.click("#save-button");
   const sync = harness.runtimeMessages.filter((message) => message.type === "SYNC_STUDY_RECORDS").at(-1);
   assert.equal(sync.records[0].screenshots.length, 1);
+});
+
+test("selecting a segment starts listening practice on the video player", async () => {
+  const harness = await createSidepanelHarness({
+    initialState: {
+      video: { videoId: "video123", title: "Practice video" },
+      transcript: [
+        { start: 10, duration: 3, text: "First sentence here." },
+        { start: 14, duration: 3, text: "Second sentence here." },
+        { start: 18, duration: 3, text: "Third sentence here." }
+      ],
+      currentTime: 10,
+      sessionPath: ""
+    }
+  });
+
+  await harness.click("#select-segment-button");
+  await harness.transcriptRowClick(0);
+  await harness.transcriptRowClick(2);
+  await harness.click("#start-practice-button");
+
+  const play = harness.tabMessages.filter((message) => message.type === "PRACTICE_PLAY_SEGMENT").at(-1);
+  assert.equal(play.start, 10);
+  assert.equal(play.end, 21);
+  assert.equal(play.rate, 1);
+
+  await harness.click("#practice-finish");
+  assert.equal(harness.tabMessages.some((message) => message.type === "PRACTICE_PAUSE"), true);
 });
 
 test("search filters transcript rows and clearing restores them", async () => {

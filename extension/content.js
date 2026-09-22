@@ -4,9 +4,21 @@ let videoInfo = null;
 let transcript = [];
 let lastUrl = location.href;
 let sessionPath = "";
+// Listening Practice：非空时播放到 end 自动暂停（片段 / 跟读单句共用）。
+let practiceSession = null;
 
 injectBridge();
 requestPlayerData();
+
+// YouTube 的 <video> 是动态创建的，用捕获阶段监听 timeupdate 最稳。
+document.addEventListener("timeupdate", (event) => {
+  const video = event.target;
+  if (!(video instanceof HTMLVideoElement) || !practiceSession) return;
+  if (practiceSession.end > 0 && video.currentTime >= practiceSession.end) {
+    video.pause();
+    practiceSession = null;
+  }
+}, true);
 
 window.addEventListener("keydown", (event) => {
   const isNoteShortcut = event.code === "KeyN" || event.key.toLowerCase() === "n";
@@ -96,6 +108,40 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "RESUME_VIDEO") {
     document.querySelector("video")?.play().catch(() => {});
     sendResponse({ ok: true });
+    return;
+  }
+
+  if (message?.type === "PRACTICE_PLAY_SEGMENT") {
+    const video = document.querySelector("video");
+    if (!video) {
+      sendResponse({ ok: false, error: "视频播放器不可用" });
+      return;
+    }
+    const start = Number(message.start) || 0;
+    const end = Number(message.end) || 0;
+    const rate = Math.min(4, Math.max(0.1, Number(message.rate) || 1));
+    video.playbackRate = rate;
+    practiceSession = end > 0 ? { end } : null;
+    try {
+      video.currentTime = start;
+    } catch (_) {}
+    video.play().catch(() => {});
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (message?.type === "PRACTICE_PAUSE") {
+    practiceSession = null;
+    document.querySelector("video")?.pause();
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (message?.type === "PRACTICE_SET_RATE") {
+    const video = document.querySelector("video");
+    if (video) video.playbackRate = Math.min(4, Math.max(0.1, Number(message.rate) || 1));
+    sendResponse({ ok: Boolean(video) });
+    return;
   }
 });
 
@@ -105,6 +151,7 @@ setInterval(() => {
     videoInfo = null;
     transcript = [];
     sessionPath = "";
+    practiceSession = null;
     notifyState();
     setTimeout(requestPlayerData, 500);
   }

@@ -80,3 +80,20 @@ test("transcript search filters rows and keeps click-to-seek", () => {
   assert.match(js, /\[data-index="\$\{index\}"\]/);
   assert.match(js, /type: "SEEK_TO",\s*seconds: item\.start/);
 });
+
+test("listening practice mode stays a separate panel that reuses the player", () => {
+  assert.match(html, /id="select-segment-button"/);
+  assert.match(html, /id="segment-select-bar"/);
+  assert.match(html, /id="start-practice-button"/);
+  assert.match(html, /id="practice-panel"/);
+  assert.match(html, /id="practice-repeat"/);
+  assert.match(html, /id="practice-subtitle-toggle"/);
+  assert.match(html, /id="shadowing-start"/);
+  assert.match(html, /id="practice-finish"/);
+  assert.match(js, /function enterPractice\(\)/);
+  assert.match(js, /function playPracticeSegment\(\)/);
+  assert.match(js, /function startShadowing\(\)/);
+  assert.match(js, /PRACTICE_PLAY_SEGMENT/);
+  assert.match(js, /PRACTICE_SET_RATE/);
+  assert.match(js, /PRACTICE_PAUSE/);
+});
