@@ -5,11 +5,12 @@ const elements = {
   transcriptList: document.querySelector("#transcript-list"),
   transcriptToolbar: document.querySelector("#transcript-toolbar"),
   transcriptSearch: document.querySelector("#transcript-search"),
-  selectSegmentButton: document.querySelector("#select-segment-button"),
-  segmentSelectBar: document.querySelector("#segment-select-bar"),
-  segmentSelectHint: document.querySelector("#segment-select-hint"),
-  segmentRange: document.querySelector("#segment-range"),
-  startPracticeButton: document.querySelector("#start-practice-button"),
+  practiceEntry: document.querySelector("#practice-entry"),
+  practiceView: document.querySelector("#practice-view"),
+  practiceBack: document.querySelector("#practice-back"),
+  practiceListHead: document.querySelector("#practice-list-head"),
+  practiceEmpty: document.querySelector("#practice-empty"),
+  practiceList: document.querySelector("#practice-list"),
   practicePanel: document.querySelector("#practice-panel"),
   practiceRange: document.querySelector("#practice-range"),
   practiceSubtitles: document.querySelector("#practice-subtitles"),
@@ -18,6 +19,7 @@ const elements = {
   practiceSubtitleToggle: document.querySelector("#practice-subtitle-toggle"),
   practiceExit: document.querySelector("#practice-exit"),
   practiceFinish: document.querySelector("#practice-finish"),
+  practiceNext: document.querySelector("#practice-next"),
   shadowingStart: document.querySelector("#shadowing-start"),
   shadowingListen: document.querySelector("#shadowing-listen"),
   shadowingNext: document.querySelector("#shadowing-next"),
@@ -59,11 +61,9 @@ let editingRecordIndex = -1;
 let transcriptFilter = "";
 let lastUserScrollAt = 0;
 let suppressScrollTracking = false;
-// Listening Practice (V2)：与笔记功能完全独立，只读现有字幕与播放器。
-let practice = null;          // { videoId, start, end, items, rate, showSubtitles }
-let selectingSegment = false;
-let segmentStartIndex = null;
-let segmentEndIndex = null;
+// Listening Practice (V2)：与笔记功能独立，围绕学习笔记自动切段，只读现有字幕与播放器。
+let practice = null;          // { videoId, segments, index, rate, showSubtitles } 当前片段视图
+let practiceViewOpen = false; // 独立练习界面是否打开
 let practicePlaying = false;
 let practiceActiveEnd = 0;
 let shadowing = null;         // { index } 或 null
@@ -92,7 +92,7 @@ async function initialize() {
 if (!isPreview) {
   // 拉取播放时间：面板可见时才向页面查询，页面不再持续推送，service worker 无谓唤醒被消除。
   setInterval(async () => {
-    if (document.hidden || (activePanel !== "transcript" && !practice)) return;
+    if (document.hidden || (activePanel !== "transcript" && !practice && !practiceViewOpen)) return;
     if (!activeTabId || !state?.video) return;
     try {
       const result = await chrome.tabs.sendMessage(activeTabId, { type: "GET_TIME" });
@@ -147,12 +147,13 @@ elements.transcriptList.addEventListener("scroll", () => {
   if (suppressScrollTracking) return;
   lastUserScrollAt = Date.now();
 });
-elements.selectSegmentButton.addEventListener("click", toggleSegmentSelection);
-elements.startPracticeButton.addEventListener("click", enterPractice);
+elements.practiceEntry.addEventListener("click", openPracticeView);
+elements.practiceBack.addEventListener("click", closePracticeView);
 elements.practiceRepeat.addEventListener("click", playPracticeSegment);
 elements.practiceSubtitleToggle.addEventListener("click", togglePracticeSubtitles);
-elements.practiceExit.addEventListener("click", exitPractice);
-elements.practiceFinish.addEventListener("click", exitPractice);
+elements.practiceExit.addEventListener("click", showPracticeList);
+elements.practiceFinish.addEventListener("click", showPracticeList);
+elements.practiceNext.addEventListener("click", nextPracticeSegment);
 elements.shadowingStart.addEventListener("click", startShadowing);
 elements.shadowingListen.addEventListener("click", () => {
   if (shadowing) playShadowingSentence(shadowing.index);
@@ -208,7 +209,7 @@ async function renderState() {
 
   const hasTranscript = state.transcript.length > 0;
   const isSaved = Boolean(state.sessionPath);
-  if (practice && practice.videoId !== state.video.videoId) exitPractice();
+  if (practice && practice.videoId !== state.video.videoId) closePracticeView();
   elements.transcriptCount.textContent = state.transcript.length;
   elements.saveStatus.className = `status-chip ${isSaved ? "saved" : hasTranscript ? "ready" : "idle"}`;
   elements.saveStatus.textContent = isSaved ? "已入库" : hasTranscript ? "待入库" : "未读取";
@@ -262,30 +263,13 @@ function buildTranscriptRow(item) {
   row.setAttribute("aria-label", `${formatTime(item.start)}，跳转到此处`);
   row.innerHTML = `<span class="transcript-time">${formatTime(item.start)}</span><span class="transcript-text"></span>`;
   row.querySelector(".transcript-text").textContent = item.text;
-  if (selectingSegment) {
-    if (segmentStartIndex !== null && item.index === segmentStartIndex) row.classList.add("segment-start");
-    if (segmentEndIndex !== null && item.index === segmentEndIndex) row.classList.add("segment-end");
-    if (segmentStartIndex !== null && segmentEndIndex !== null
-      && item.index > Math.min(segmentStartIndex, segmentEndIndex)
-      && item.index < Math.max(segmentStartIndex, segmentEndIndex)) {
-      row.classList.add("segment-in-range");
-    }
-  }
   row.addEventListener("click", () => {
     if (window.getSelection()?.toString()) return;
-    if (selectingSegment) {
-      handleSegmentRowClick(item.index);
-      return;
-    }
     chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
   });
   row.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    if (selectingSegment) {
-      handleSegmentRowClick(item.index);
-      return;
-    }
     chrome.tabs.sendMessage(activeTabId, { type: "SEEK_TO", seconds: item.start });
   });
   return row;
@@ -750,8 +734,8 @@ async function seekToRecord(record) {
 }
 
 function switchTab(tab) {
-  if (practice) {
-    exitPractice();
+  if (practiceViewOpen) {
+    closePracticeView();
     return;
   }
   activePanel = tab;
@@ -762,88 +746,128 @@ function switchTab(tab) {
 
 // ---------- Listening Practice Mode (V2) ----------
 
-function toggleSegmentSelection() {
-  if (practice) return;
-  selectingSegment = !selectingSegment;
-  if (!selectingSegment) {
-    cancelSegmentSelection();
-    return;
-  }
-  elements.segmentSelectBar.classList.remove("hidden");
-  elements.segmentSelectHint.textContent = "点击字幕设置起点";
-  elements.selectSegmentButton.classList.add("active");
-  elements.selectSegmentButton.textContent = "取消选择";
-  renderTranscriptList();
+// 围绕学习笔记自动切段：以每条笔记时间为中心取前后约 30 秒，并扩展到完整字幕句边界。
+function buildPracticeSegments() {
+  if (!state?.transcript?.length || !records.length) return [];
+  const transcript = state.transcript;
+  const segments = [];
+  records.forEach((record, recordIndex) => {
+    const anchor = record.time;
+    if (typeof anchor !== "number" || anchor < 0) return;
+    const before = anchor - 30;
+    const after = anchor + 30;
+    let from = 0;
+    for (let i = 0; i < transcript.length; i += 1) {
+      if (transcript[i].start <= before) from = i;
+      else break;
+    }
+    let to = transcript.length - 1;
+    for (let i = 0; i < transcript.length; i += 1) {
+      const end = transcript[i].start + (transcript[i].duration || 3);
+      if (end >= after) {
+        to = i;
+        break;
+      }
+    }
+    segments.push({
+      recordIndex,
+      start: transcript[from].start,
+      end: transcript[to].start + (transcript[to].duration || 3),
+      items: transcript.slice(from, to + 1).map((item) => ({
+        start: item.start,
+        end: item.start + (item.duration || 3),
+        text: item.text
+      })),
+      note: record.note || record.text || ""
+    });
+  });
+  return segments;
 }
 
-function cancelSegmentSelection() {
-  selectingSegment = false;
-  segmentStartIndex = null;
-  segmentEndIndex = null;
-  elements.segmentSelectBar.classList.add("hidden");
-  elements.segmentRange.classList.add("hidden");
-  elements.startPracticeButton.classList.add("hidden");
-  elements.selectSegmentButton.classList.remove("active");
-  elements.selectSegmentButton.textContent = "选择片段";
-  renderTranscriptList();
+function openPracticeView() {
+  if (!state?.video?.videoId) return;
+  practiceViewOpen = true;
+  document.body.classList.add("practice-mode");
+  elements.practiceView.classList.remove("hidden");
+  elements.transcriptPanel.classList.add("hidden");
+  elements.recordsPanel.classList.add("hidden");
+  elements.empty.classList.add("hidden");
+  renderPracticeList(buildPracticeSegments());
 }
 
-function handleSegmentRowClick(index) {
-  if (segmentStartIndex === null) {
-    segmentStartIndex = index;
-    segmentEndIndex = null;
-    elements.segmentSelectHint.textContent = "点击字幕设置终点";
-    elements.segmentRange.classList.add("hidden");
-    elements.startPracticeButton.classList.add("hidden");
-  } else {
-    segmentEndIndex = index;
-    updateSegmentSelection();
-  }
-  renderTranscriptList();
+function closePracticeView() {
+  showPracticeList();
+  practiceViewOpen = false;
+  document.body.classList.remove("practice-mode");
+  elements.practiceView.classList.add("hidden");
+  elements.transcriptPanel.classList.toggle("hidden", activePanel !== "transcript");
+  elements.recordsPanel.classList.toggle("hidden", activePanel !== "records");
+  if (!state?.video) elements.empty.classList.remove("hidden");
 }
 
-function updateSegmentSelection() {
-  if (segmentStartIndex === null || segmentEndIndex === null || !state?.transcript?.length) return;
-  const from = Math.min(segmentStartIndex, segmentEndIndex);
-  const to = Math.max(segmentStartIndex, segmentEndIndex);
-  const startItem = state.transcript[from];
-  const endItem = state.transcript[to];
-  elements.segmentRange.textContent =
-    `${formatTime(startItem.start)} — ${formatTime(endItem.start + (endItem.duration || 3))}`;
-  elements.segmentRange.classList.remove("hidden");
-  elements.startPracticeButton.classList.remove("hidden");
-  elements.segmentSelectHint.textContent = "已选好片段，点「开始听力练习」，或再点字幕重新选择";
+function renderPracticeList(segments) {
+  practice = null;
+  shadowing = null;
+  practicePlaying = false;
+  practiceActiveEnd = 0;
+  elements.practicePanel.classList.add("hidden");
+  const hasSegments = segments.length > 0;
+  elements.practiceListHead.classList.toggle("hidden", !hasSegments);
+  elements.practiceEmpty.classList.toggle("hidden", hasSegments);
+  elements.practiceList.classList.toggle("hidden", !hasSegments);
+  elements.practiceList.replaceChildren(...segments.map((segment, index) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "practice-segment";
+    item.innerHTML = `
+      <span class="practice-segment-range">${formatTime(segment.start)} — ${formatTime(segment.end)}</span>
+      <span class="practice-segment-note"></span>
+      <span class="practice-segment-meta">${segment.items.length} 句 · 来自第 ${segment.recordIndex + 1} 条笔记</span>
+    `;
+    item.querySelector(".practice-segment-note").textContent = segment.note || "（这条笔记没有文字）";
+    item.addEventListener("click", () => enterPractice(segments, index));
+    return item;
+  }));
 }
 
-function enterPractice() {
-  if (segmentStartIndex === null || segmentEndIndex === null || !state?.transcript?.length) return;
-  const from = Math.min(segmentStartIndex, segmentEndIndex);
-  const to = Math.max(segmentStartIndex, segmentEndIndex);
+function showPracticeList() {
+  chrome.tabs.sendMessage(activeTabId, { type: "PRACTICE_PAUSE" }).catch(() => {});
+  practice = null;
+  shadowing = null;
+  practicePlaying = false;
+  practiceActiveEnd = 0;
+  elements.practicePanel.classList.add("hidden");
+  elements.practiceList.classList.remove("hidden");
+  elements.practiceListHead.classList.remove("hidden");
+  elements.practiceEmpty.classList.add("hidden");
+}
+
+function enterPractice(segments, index) {
+  if (!segments?.length) return;
   practice = {
     videoId: state.video.videoId,
-    start: state.transcript[from].start,
-    end: state.transcript[to].start + (state.transcript[to].duration || 3),
-    items: state.transcript.slice(from, to + 1).map((item) => ({
-      start: item.start,
-      end: item.start + (item.duration || 3),
-      text: item.text
-    })),
+    segments,
+    index,
     rate: 1,
     showSubtitles: false
   };
-  shadowing = null;
-  selectingSegment = false;
-  cancelSegmentSelection();
+  renderPractice();
+}
+
+function nextPracticeSegment() {
+  if (!practice || practice.index >= practice.segments.length - 1) return;
+  practice.index += 1;
   renderPractice();
 }
 
 function renderPractice() {
   if (!practice) return;
+  const segment = practice.segments[practice.index];
   elements.practicePanel.classList.remove("hidden");
-  elements.transcriptPanel.classList.add("hidden");
-  elements.recordsPanel.classList.add("hidden");
-  elements.practiceRange.textContent = `${formatTime(practice.start)} — ${formatTime(practice.end)}`;
-  elements.practiceSubtitles.replaceChildren(...practice.items.map((item, index) => {
+  elements.practiceList.classList.add("hidden");
+  elements.practiceListHead.classList.add("hidden");
+  elements.practiceRange.textContent = `${formatTime(segment.start)} — ${formatTime(segment.end)}`;
+  elements.practiceSubtitles.replaceChildren(...segment.items.map((item, index) => {
     const row = document.createElement("div");
     row.className = "practice-subtitle-row";
     row.dataset.index = index;
@@ -860,6 +884,7 @@ function renderPractice() {
   elements.shadowingProgress.textContent = "";
   elements.shadowingSentence.textContent = "";
   elements.shadowingStatus.textContent = "先听一遍。听不懂就「再听一次」或放慢速度；仍不懂再「显示字幕」。";
+  elements.practiceNext.classList.toggle("hidden", practice.index >= practice.segments.length - 1);
   playPracticeSegment();
 }
 
@@ -874,11 +899,12 @@ function sendPracticePlay(start, end, rate) {
 
 function playPracticeSegment() {
   if (!practice || practicePlaying) return;
+  const segment = practice.segments[practice.index];
   practicePlaying = true;
-  practiceActiveEnd = practice.end;
+  practiceActiveEnd = segment.end;
   elements.practiceRepeat.disabled = true;
   elements.practiceRepeat.textContent = "播放中…";
-  sendPracticePlay(practice.start, practice.end, practice.rate);
+  sendPracticePlay(segment.start, segment.end, practice.rate);
 }
 
 function handlePracticePlaybackEnd() {
@@ -925,39 +951,43 @@ function startShadowing() {
 }
 
 function renderShadowing() {
-  if (!shadowing) return;
+  if (!shadowing || !practice) return;
+  const segment = practice.segments[practice.index];
   elements.shadowingStart.classList.add("hidden");
   elements.shadowingListen.classList.add("hidden");
   elements.shadowingNext.classList.add("hidden");
-  elements.shadowingProgress.textContent = `第 ${shadowing.index + 1} / ${practice.items.length} 句`;
-  elements.shadowingSentence.textContent = practice.items[shadowing.index].text;
+  elements.shadowingProgress.textContent = `第 ${shadowing.index + 1} / ${segment.items.length} 句`;
+  elements.shadowingSentence.textContent = segment.items[shadowing.index].text;
   elements.shadowingSentence.classList.remove("hidden");
 }
 
 function playShadowingSentence(index) {
-  if (!practice || !shadowing || index >= practice.items.length) return;
+  if (!practice || !shadowing) return;
+  const segment = practice.segments[practice.index];
+  if (index >= segment.items.length) return;
   shadowing.index = index;
   renderShadowing();
   practicePlaying = true;
-  practiceActiveEnd = practice.items[index].end;
+  practiceActiveEnd = segment.items[index].end;
   elements.shadowingListen.disabled = true;
   elements.shadowingNext.disabled = true;
   elements.shadowingListen.classList.remove("hidden");
   elements.shadowingNext.classList.remove("hidden");
-  elements.shadowingNext.textContent = index >= practice.items.length - 1 ? "完成跟读" : "下一句";
+  elements.shadowingNext.textContent = index >= segment.items.length - 1 ? "完成跟读" : "下一句";
   elements.shadowingStatus.textContent = "播放原声…";
   elements.practiceSubtitles.querySelectorAll(".practice-subtitle-row.current").forEach((row) => {
     row.classList.remove("current");
   });
   const row = elements.practiceSubtitles.querySelector(`[data-index="${index}"]`);
   if (row) row.classList.add("current");
-  sendPracticePlay(practice.items[index].start, practice.items[index].end, practice.rate);
+  sendPracticePlay(segment.items[index].start, segment.items[index].end, practice.rate);
 }
 
 function nextShadowingSentence() {
   if (!practice || !shadowing) return;
+  const segment = practice.segments[practice.index];
   const next = shadowing.index + 1;
-  if (next >= practice.items.length) {
+  if (next >= segment.items.length) {
     shadowing = null;
     practicePlaying = false;
     elements.shadowingStart.classList.remove("hidden");
@@ -969,17 +999,6 @@ function nextShadowingSentence() {
     return;
   }
   playShadowingSentence(next);
-}
-
-function exitPractice() {
-  chrome.tabs.sendMessage(activeTabId, { type: "PRACTICE_PAUSE" }).catch(() => {});
-  practice = null;
-  shadowing = null;
-  practicePlaying = false;
-  practiceActiveEnd = 0;
-  elements.practicePanel.classList.add("hidden");
-  elements.transcriptPanel.classList.toggle("hidden", activePanel !== "transcript");
-  elements.recordsPanel.classList.toggle("hidden", activePanel !== "records");
 }
 
 function updateCurrentTranscript(time) {

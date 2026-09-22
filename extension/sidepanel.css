@@ -134,14 +134,14 @@ h2 {
 .primary-button:disabled, .secondary-button:disabled { opacity: 0.42; cursor: default; box-shadow: none; }
 
 .tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
   gap: 4px;
   padding: 5px 14px 8px;
   border-bottom: 1px solid var(--line);
 }
 
 .tab {
+  flex: 1;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -249,10 +249,32 @@ h2 {
 .transcript-search::placeholder { color: var(--placeholder); }
 .transcript-search:focus { border-color: var(--terracotta); box-shadow: 0 0 0 3px rgba(201, 111, 58, 0.1); }
 
-.segment-select-button {
+/* 听力练习入口与独立练习视图 */
+.practice-entry {
+  margin-left: auto;
   flex: none;
-  padding: 7px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
   color: var(--terracotta-dark);
+  background: var(--chip-ready-bg);
+  border: 1px solid rgba(201, 111, 58, 0.28);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.practice-entry:hover { background: rgba(201, 111, 58, 0.14); }
+.practice-entry svg { width: 13px; height: 13px; fill: currentColor; }
+
+.practice-view { padding: 14px 14px 24px; }
+.practice-view-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+.practice-back {
+  flex: none;
+  padding: 5px 9px;
+  color: var(--muted);
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -260,49 +282,44 @@ h2 {
   font-weight: 700;
   cursor: pointer;
 }
-.segment-select-button:hover:not(.active) { background: var(--surface); border-color: rgba(74, 51, 36, 0.32); }
-.segment-select-button.active { color: #fffaf0; background: var(--terracotta); border-color: var(--terracotta); }
+.practice-back:hover { color: var(--ink); background: var(--surface); }
+.practice-heading { flex: 1; }
+.practice-title { margin-top: 4px; color: var(--ink); font-size: 16px; font-weight: 800; }
 
-.segment-select-bar {
+.practice-list-head { margin-bottom: 10px; padding: 9px 11px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+.practice-empty { padding: 34px 18px; text-align: center; color: var(--muted); }
+.practice-empty p { margin: 0 0 8px; color: var(--ink); font-size: 14px; font-weight: 700; }
+.practice-empty span { font-size: 12px; line-height: 1.7; }
+
+.practice-list { display: flex; flex-direction: column; gap: 8px; }
+.practice-segment {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin: 0 10px 8px;
-  padding: 8px 10px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 12px;
+  text-align: left;
+  color: var(--ink);
   background: var(--surface);
-  border: 1px dashed var(--olive);
-  border-radius: 9px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.segment-select-hint { flex: 1; min-width: 130px; }
-.segment-range { color: var(--olive); font: 700 11px/1.2 ui-monospace, monospace; }
-.segment-cta {
-  padding: 7px 12px;
-  color: #fffaf0;
-  background: var(--terracotta);
-  border: 1px solid var(--terracotta);
-  border-radius: 8px;
-  font-size: 11px;
-  font-weight: 700;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
 }
-.segment-cta:hover:not(:disabled) { background: var(--terracotta-dark); }
-.segment-cta:disabled { opacity: 0.42; cursor: default; }
+.practice-segment:hover { border-color: rgba(201, 111, 58, 0.45); background: var(--quote-bg); }
+.practice-segment-range { color: var(--terracotta-dark); font: 700 13px/1.3 ui-monospace, "Cascadia Mono", monospace; }
+.practice-segment-note {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.practice-segment-meta { color: var(--muted); font-size: 10px; }
 
-.transcript-row.segment-start, .transcript-row.segment-end { background: var(--current-bg); border-color: var(--current-border); }
-.transcript-row.segment-in-range { background: var(--quote-bg); }
-.transcript-row.segment-start::before, .transcript-row.segment-end::before {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
-  width: 4px;
-  background: var(--olive);
-  border-radius: 0 3px 3px 0;
-  content: "";
-}
+body.practice-mode .composer { display: none; }
 
 .record { margin-bottom: 10px; padding: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 5px 12px 12px; box-shadow: var(--record-shadow); }
 .record-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

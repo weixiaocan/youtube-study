@@ -74,6 +74,7 @@ async function createSidepanelHarness(options = {}) {
   const document = {
     hidden: false,
     title: "",
+    body: element("body"),
     documentElement: element("html"),
     querySelector: element,
     querySelectorAll() { return []; },
@@ -200,6 +201,10 @@ async function createSidepanelHarness(options = {}) {
     ,async transcriptRowClick(index) {
       return element("#transcript-list").children[index].dispatch("click", { preventDefault() {} });
     }
+    ,practiceSegmentCount() { return element("#practice-list").children.length; }
+    ,async practiceSegmentClick(index) {
+      return element("#practice-list").children[index].dispatch("click");
+    }
     ,async draftScreenshotAction(index, selector) {
       return element("#screenshot-preview-list").children[index].querySelector(selector).dispatch("click");
     }
@@ -309,32 +314,46 @@ test("editing a record can add several screenshots and remove one", async () => 
   assert.equal(sync.records[0].screenshots.length, 1);
 });
 
-test("selecting a segment starts listening practice on the video player", async () => {
+test("practice segments are cut automatically around saved notes", async () => {
   const harness = await createSidepanelHarness({
     initialState: {
       video: { videoId: "video123", title: "Practice video" },
       transcript: [
         { start: 10, duration: 3, text: "First sentence here." },
         { start: 14, duration: 3, text: "Second sentence here." },
-        { start: 18, duration: 3, text: "Third sentence here." }
+        { start: 18, duration: 3, text: "Third sentence here." },
+        { start: 22, duration: 3, text: "Fourth sentence here." },
+        { start: 26, duration: 3, text: "Fifth sentence here." }
       ],
-      currentTime: 10,
+      currentTime: 18,
       sessionPath: ""
-    }
+    },
+    initialRecords: [{
+      videoId: "video123",
+      timestamp: "0:18",
+      time: 18,
+      text: "Third sentence here.",
+      note: "这句没听懂，想多听几遍",
+      screenshots: []
+    }]
   });
 
-  await harness.click("#select-segment-button");
-  await harness.transcriptRowClick(0);
-  await harness.transcriptRowClick(2);
-  await harness.click("#start-practice-button");
+  // 打开独立练习界面：生成围绕笔记的片段列表，此时不应直接播放
+  await harness.click("#practice-entry");
+  assert.equal(harness.practiceSegmentCount(), 1);
+  assert.equal(harness.tabMessages.some((message) => message.type === "PRACTICE_PLAY_SEGMENT"), false);
 
+  // 点片段进入练习：播放器收到围绕该笔记时间的片段播放消息
+  await harness.practiceSegmentClick(0);
   const play = harness.tabMessages.filter((message) => message.type === "PRACTICE_PLAY_SEGMENT").at(-1);
   assert.equal(play.start, 10);
-  assert.equal(play.end, 21);
+  assert.equal(play.end, 29);
   assert.equal(play.rate, 1);
 
+  // 完成练习：暂停播放并回到片段列表，不再停留在练习面板
   await harness.click("#practice-finish");
   assert.equal(harness.tabMessages.some((message) => message.type === "PRACTICE_PAUSE"), true);
+  assert.equal(harness.practiceSegmentCount(), 1);
 });
 
 test("search filters transcript rows and clearing restores them", async () => {

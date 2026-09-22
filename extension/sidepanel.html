@@ -33,6 +33,10 @@
         <button class="tab" data-tab="records">
           <span>学习笔记</span><span id="record-count" class="tab-count">0</span>
         </button>
+        <button id="practice-entry" class="practice-entry" type="button" aria-label="打开听力练习">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.5v11l9-5.5z"/></svg>
+          <span>听力练习</span>
+        </button>
       </nav>
     </div>
 
@@ -55,12 +59,6 @@
         <div class="transcript-toolbar hidden" id="transcript-toolbar">
           <input id="transcript-search" class="transcript-search" type="search"
             placeholder="搜索字幕…" aria-label="搜索字幕" autocomplete="off">
-          <button id="select-segment-button" class="segment-select-button" type="button">选择片段</button>
-        </div>
-        <div id="segment-select-bar" class="segment-select-bar hidden" aria-live="polite">
-          <span id="segment-select-hint" class="segment-select-hint">点击字幕设置起点</span>
-          <span id="segment-range" class="segment-range hidden"></span>
-          <button id="start-practice-button" class="segment-cta hidden" type="button">开始听力练习</button>
         </div>
         <div id="transcript-list" class="transcript-list"></div>
       </section>
@@ -69,42 +67,62 @@
         <div id="records-list" class="records-list"></div>
       </section>
 
-      <section id="practice-panel" class="panel practice-panel hidden" aria-label="听力练习">
-        <div class="practice-head">
-          <div>
+      <section id="practice-view" class="panel practice-view hidden" aria-label="听力练习">
+        <div class="practice-view-head">
+          <button id="practice-back" class="practice-back" type="button" aria-label="返回字幕笔记">← 返回</button>
+          <div class="practice-heading">
             <div class="practice-kicker">LISTENING PRACTICE</div>
-            <div id="practice-range" class="practice-range"></div>
+            <div class="practice-title">听力练习</div>
           </div>
-          <button id="practice-exit" class="practice-exit" type="button" aria-label="退出练习">✕</button>
         </div>
 
-        <div id="practice-subtitles" class="practice-subtitles hidden" aria-label="当前片段字幕"></div>
-
-        <div class="practice-controls">
-          <button id="practice-repeat" class="practice-repeat primary-button" type="button" disabled>再听一次</button>
-          <div class="practice-rate-group" role="group" aria-label="播放速度">
-            <button class="practice-rate" type="button" data-rate="0.8">0.8×</button>
-            <button class="practice-rate active" type="button" data-rate="1">1.0×</button>
-            <button class="practice-rate" type="button" data-rate="1.25">1.25×</button>
-          </div>
-          <button id="practice-subtitle-toggle" class="secondary-button" type="button">显示字幕</button>
+        <div id="practice-list-head" class="practice-list-head hidden">
+          <span>围绕你的学习笔记自动切出的片段，点任意一条开始练习</span>
         </div>
-
-        <div class="practice-divider" role="presentation"></div>
-
-        <div class="shadowing-panel">
-          <div class="shadowing-head">
-            <span id="shadowing-progress" class="shadowing-progress"></span>
-            <button id="shadowing-start" class="secondary-button" type="button">开始跟读</button>
-            <button id="shadowing-listen" class="secondary-button hidden" type="button">听原声</button>
-            <button id="shadowing-next" class="primary-button hidden" type="button">下一句</button>
-          </div>
-          <div id="shadowing-sentence" class="shadowing-sentence"></div>
-          <div id="shadowing-status" class="shadowing-status" aria-live="polite"></div>
+        <div id="practice-empty" class="practice-empty hidden">
+          <p>还没有可练习的片段</p>
+          <span>先在「学习笔记」里记下几条笔记，系统会围绕每条笔记的时间点自动切出约 1 分钟的完整片段。</span>
         </div>
+        <div id="practice-list" class="practice-list hidden"></div>
 
-        <div class="practice-footer">
-          <button id="practice-finish" class="practice-finish" type="button">完成练习</button>
+        <div id="practice-panel" class="practice-panel hidden">
+          <div class="practice-head">
+            <div>
+              <div class="practice-kicker">LISTENING PRACTICE</div>
+              <div id="practice-range" class="practice-range"></div>
+            </div>
+            <button id="practice-exit" class="practice-exit" type="button" aria-label="返回片段列表">✕</button>
+          </div>
+
+          <div id="practice-subtitles" class="practice-subtitles hidden" aria-label="当前片段字幕"></div>
+
+          <div class="practice-controls">
+            <button id="practice-repeat" class="practice-repeat primary-button" type="button" disabled>再听一次</button>
+            <div class="practice-rate-group" role="group" aria-label="播放速度">
+              <button class="practice-rate" type="button" data-rate="0.8">0.8×</button>
+              <button class="practice-rate active" type="button" data-rate="1">1.0×</button>
+              <button class="practice-rate" type="button" data-rate="1.25">1.25×</button>
+            </div>
+            <button id="practice-subtitle-toggle" class="secondary-button" type="button">显示字幕</button>
+          </div>
+
+          <div class="practice-divider" role="presentation"></div>
+
+          <div class="shadowing-panel">
+            <div class="shadowing-head">
+              <span id="shadowing-progress" class="shadowing-progress"></span>
+              <button id="shadowing-start" class="secondary-button" type="button">开始跟读</button>
+              <button id="shadowing-listen" class="secondary-button hidden" type="button">听原声</button>
+              <button id="shadowing-next" class="primary-button hidden" type="button">下一句</button>
+            </div>
+            <div id="shadowing-sentence" class="shadowing-sentence"></div>
+            <div id="shadowing-status" class="shadowing-status" aria-live="polite"></div>
+          </div>
+
+          <div class="practice-footer">
+            <button id="practice-next" class="practice-next secondary-button hidden" type="button">下一个片段</button>
+            <button id="practice-finish" class="practice-finish" type="button">完成练习</button>
+          </div>
         </div>
       </section>
     </main>
