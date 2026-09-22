@@ -71,8 +71,33 @@ const screenshotPreviews = new Map();
 const isPreview = new URLSearchParams(window.location.search).has("preview");
 
 setComposerIdle();
-if (isPreview) initializePreview();
-else initialize();
+if (isPreview) {
+  ensurePreviewChromeStub();
+  initializePreview();
+} else {
+  initialize();
+}
+
+// preview 页以 file:// 直接打开时没有扩展的 chrome.tabs API，补一个只读 stub，
+// 让练习流程的 UI 演示可完整走通；真实扩展环境中 chrome.tabs 存在，本函数直接返回。
+function ensurePreviewChromeStub() {
+  if (globalThis.chrome?.tabs?.sendMessage) return;
+  const ok = Promise.resolve({ ok: true });
+  globalThis.chrome = {
+    tabs: {
+      sendMessage: () => ok,
+      query: async () => []
+    },
+    runtime: {
+      onMessage: { addListener() {} },
+      sendMessage: () => ok
+    },
+    storage: {
+      local: { get: async () => ({}), set: async () => {} },
+      session: { get: async () => ({}), set: async () => {}, remove: async () => {} }
+    }
+  };
+}
 
 async function initialize() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
