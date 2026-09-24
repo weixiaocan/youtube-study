@@ -143,6 +143,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: Boolean(video) });
     return;
   }
+
+  if (message?.type === "PRACTICE_SET_CC") {
+    const show = Boolean(message.show);
+    const ccButton = document.querySelector(".ytp-subtitles-button");
+    if (ccButton) {
+      const isOn = ccButton.getAttribute("aria-pressed") === "true";
+      if (isOn !== show) ccButton.click();
+    }
+    sendResponse({ ok: Boolean(ccButton) });
+    return;
+  }
 });
 
 setInterval(() => {

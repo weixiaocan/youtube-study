@@ -923,6 +923,7 @@ function renderPractice() {
     return row;
   }));
   setPracticeSubtitlesVisible(practice.showSubtitles);
+  chrome.tabs.sendMessage(activeTabId, { type: "PRACTICE_SET_CC", show: practice.showSubtitles }).catch(() => {});
   elements.shadowingStart.textContent = "开始跟读";
   elements.shadowingStart.classList.remove("hidden");
   elements.shadowingListen.classList.add("hidden");
@@ -987,6 +988,7 @@ function togglePracticeSubtitles() {
   if (!practice) return;
   practice.showSubtitles = !practice.showSubtitles;
   setPracticeSubtitlesVisible(practice.showSubtitles);
+  chrome.tabs.sendMessage(activeTabId, { type: "PRACTICE_SET_CC", show: practice.showSubtitles }).catch(() => {});
 }
 
 function startShadowing() {
