@@ -386,22 +386,19 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
                 raise RuntimeError("同名笔记路径已被其他视频占用")
             return note
     url = metadata["url"]
-    thumbnail = download_thumbnail(vault, metadata["videoId"])
+    video_id = metadata["videoId"]
+    thumb_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+    alt = re.sub(r"[\[\]]", "", title)
     video_info = [
         "## 视频信息",
         "",
-    ]
-    if thumbnail:
-        alt = re.sub(r"[\[\]]", "", title)
-        video_info.extend([
-            f"[![{alt}]({thumbnail})]({url})",
-            "",
-        ])
-    video_info.extend([
-        f"- 频道：{metadata.get('author') or '未知'}",
-        f"- 来源：[YouTube]({url})",
+        f"[![{alt}]({thumb_url})]({url})",
         "",
-    ])
+        f"[▶ 在 YouTube 中观看]({url})",
+        "",
+        f"- 频道：{metadata.get('author') or '未知'}",
+        "",
+    ]
     content = "\n".join([
         "---",
         'kb_type: "video-note"',
