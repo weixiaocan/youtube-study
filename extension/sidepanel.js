@@ -104,14 +104,21 @@ async function initialize() {
   activeTabId = tab?.id;
   if (!activeTabId || !tab.url?.startsWith("https://www.youtube.com/")) return;
 
-  try {
-    const ready = await chrome.runtime.sendMessage({ type: "ENSURE_CONTENT_SCRIPT", tabId: activeTabId });
-    if (!ready?.ok) throw new Error(ready?.error || "无法连接 YouTube 页面");
-    state = ready.state;
-    await renderState();
-  } catch (error) {
-    showEmpty(error.message || "无法连接 YouTube 页面");
+  // 扩展重载后 service worker 可能还在启动，自动重试连接
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const ready = await chrome.runtime.sendMessage({ type: "ENSURE_CONTENT_SCRIPT", tabId: activeTabId });
+      if (!ready?.ok) throw new Error(ready?.error || "无法连接 YouTube 页面");
+      state = ready.state;
+      await renderState();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
+  showEmpty(lastError?.message || "无法连接 YouTube 页面");
 }
 
 if (!isPreview) {
