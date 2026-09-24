@@ -947,7 +947,7 @@ function renderPractice() {
   // 重置跟读区域
   shadowing = null;
   elements.shadowingBody.classList.add("hidden");
-  elements.shadowingToggle.textContent = "开始跟读练习";
+  elements.shadowingToggle.textContent = "跟读练习";
   elements.shadowingProgress.textContent = "";
   elements.shadowingSentence.textContent = "";
   elements.shadowingStatus.textContent = "";
@@ -989,7 +989,7 @@ function playPracticeSegment() {
 
 function updatePlayPauseButton() {
   if (!practice) return;
-  elements.practicePlaypause.textContent = practicePlaying ? "暂停" : "播放";
+  elements.practicePlaypause.querySelector("span").textContent = practicePlaying ? "暂停" : "播放";
 }
 
 function handlePracticePlaybackEnd() {
@@ -1031,7 +1031,7 @@ function toggleShadowing() {
     shadowing = null;
     stopPlayback();
     elements.shadowingBody.classList.add("hidden");
-    elements.shadowingToggle.textContent = "开始跟读练习";
+    elements.shadowingToggle.textContent = "跟读练习";
     updatePlayPauseButton();
   } else {
     // 开始跟读
@@ -1087,7 +1087,7 @@ function nextShadowingSentence() {
     shadowing = null;
     stopPlayback();
     elements.shadowingBody.classList.add("hidden");
-    elements.shadowingToggle.textContent = "开始跟读练习";
+    elements.shadowingToggle.textContent = "跟读练习";
     elements.shadowingStatus.textContent = "";
     updatePlayPauseButton();
     return;
