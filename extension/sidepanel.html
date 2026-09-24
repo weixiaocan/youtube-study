@@ -86,42 +86,45 @@
         <div id="practice-list" class="practice-list hidden"></div>
 
         <div id="practice-panel" class="practice-panel hidden">
-          <div class="practice-head">
-            <div>
-              <div class="practice-kicker">LISTENING PRACTICE</div>
-              <div id="practice-range" class="practice-range"></div>
-            </div>
-            <button id="practice-exit" class="practice-exit" type="button" aria-label="返回片段列表">✕</button>
+          <div class="practice-nav-row">
+            <span id="practice-counter" class="practice-counter"></span>
+            <span id="practice-range" class="practice-range"></span>
           </div>
 
-          <div id="practice-subtitles" class="practice-subtitles hidden" aria-label="当前片段字幕"></div>
+          <div class="practice-main-controls">
+            <button id="practice-playpause" class="practice-playpause primary-button" type="button">播放</button>
+            <button id="practice-repeat" class="practice-repeat secondary-button" type="button">再听一次</button>
+          </div>
 
-          <div class="practice-controls">
-            <button id="practice-repeat" class="practice-repeat primary-button" type="button" disabled>再听一次</button>
+          <div class="practice-secondary-controls">
             <div class="practice-rate-group" role="group" aria-label="播放速度">
               <button class="practice-rate" type="button" data-rate="0.8">0.8×</button>
               <button class="practice-rate active" type="button" data-rate="1">1.0×</button>
               <button class="practice-rate" type="button" data-rate="1.25">1.25×</button>
             </div>
-            <button id="practice-subtitle-toggle" class="secondary-button" type="button">显示字幕</button>
+            <button id="practice-subtitle-toggle" class="secondary-button" type="button">字幕关</button>
           </div>
+
+          <div id="practice-subtitles" class="practice-subtitles hidden" aria-label="当前片段字幕"></div>
 
           <div class="practice-divider" role="presentation"></div>
 
           <div class="shadowing-panel">
-            <div class="shadowing-head">
-              <span id="shadowing-progress" class="shadowing-progress"></span>
-              <button id="shadowing-start" class="secondary-button" type="button">开始跟读</button>
-              <button id="shadowing-listen" class="secondary-button hidden" type="button">听原声</button>
-              <button id="shadowing-next" class="primary-button hidden" type="button">下一句</button>
+            <button id="shadowing-toggle" class="shadowing-toggle secondary-button" type="button">开始跟读练习</button>
+            <div id="shadowing-body" class="shadowing-body hidden">
+              <div class="shadowing-head">
+                <span id="shadowing-progress" class="shadowing-progress"></span>
+                <button id="shadowing-listen" class="secondary-button" type="button">听原声</button>
+                <button id="shadowing-next" class="primary-button" type="button">下一句</button>
+              </div>
+              <div id="shadowing-sentence" class="shadowing-sentence"></div>
+              <div id="shadowing-status" class="shadowing-status" aria-live="polite"></div>
             </div>
-            <div id="shadowing-sentence" class="shadowing-sentence"></div>
-            <div id="shadowing-status" class="shadowing-status" aria-live="polite"></div>
           </div>
 
           <div class="practice-footer">
-            <button id="practice-next" class="practice-next secondary-button hidden" type="button">下一个片段</button>
-            <button id="practice-finish" class="practice-finish" type="button">完成练习</button>
+            <button id="practice-prev" class="secondary-button" type="button">← 上一个</button>
+            <button id="practice-next" class="secondary-button" type="button">下一个 →</button>
           </div>
         </div>
       </section>

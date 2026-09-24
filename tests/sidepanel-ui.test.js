@@ -65,7 +65,8 @@ test("avoids browser-default blockquotes and exposes clear save state", () => {
 });
 
 test("developer preview cannot replace normal Chrome initialization", () => {
-  assert.match(js, /if \(isPreview\) initializePreview\(\);\s*else initialize\(\);/);
+  assert.match(js, /if \(isPreview\) \{\s*ensurePreviewChromeStub\(\);\s*initializePreview\(\);\s*\}\s*else \{\s*initialize\(\);\s*\}/);
+  assert.match(js, /function ensurePreviewChromeStub\(\)/);
   assert.match(js, /if \(!isPreview\) \{[\s\S]{0,1200}?chrome\.runtime\.onMessage/);
   assert.match(js, /type: "GET_TIME"/);
   assert.doesNotMatch(js, /PLAYBACK_TIME/);
@@ -90,8 +91,11 @@ test("listening practice mode is a separate view with automatic note-based segme
   assert.match(html, /id="practice-repeat"/);
   assert.match(html, /id="practice-subtitle-toggle"/);
   assert.match(html, /id="practice-next"/);
-  assert.match(html, /id="shadowing-start"/);
-  assert.match(html, /id="practice-finish"/);
+  assert.match(html, /id="practice-prev"/);
+  assert.match(html, /id="practice-playpause"/);
+  assert.match(html, /id="shadowing-toggle"/);
+  assert.doesNotMatch(html, /id="practice-finish"/);
+  assert.doesNotMatch(html, /id="shadowing-start"/);
   assert.doesNotMatch(html, /select-segment-button/);
   assert.doesNotMatch(html, /segment-select-bar/);
   assert.doesNotMatch(html, /start-practice-button/);
@@ -101,7 +105,7 @@ test("listening practice mode is a separate view with automatic note-based segme
   assert.match(js, /function enterPractice\(segments, index\)/);
   assert.match(js, /function nextPracticeSegment\(\)/);
   assert.match(js, /function playPracticeSegment\(\)/);
-  assert.match(js, /function startShadowing\(\)/);
+  assert.match(js, /function toggleShadowing\(\)/);
   assert.match(js, /PRACTICE_PLAY_SEGMENT/);
   assert.match(js, /PRACTICE_SET_RATE/);
   assert.match(js, /PRACTICE_PAUSE/);

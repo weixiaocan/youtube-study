@@ -343,15 +343,16 @@ test("practice segments are cut automatically around saved notes", async () => {
   assert.equal(harness.practiceSegmentCount(), 1);
   assert.equal(harness.tabMessages.some((message) => message.type === "PRACTICE_PLAY_SEGMENT"), false);
 
-  // 点片段进入练习：播放器收到围绕该笔记时间的片段播放消息
+  // 点片段进入练习面板，再点播放按钮
   await harness.practiceSegmentClick(0);
+  await harness.click("#practice-playpause");
   const play = harness.tabMessages.filter((message) => message.type === "PRACTICE_PLAY_SEGMENT").at(-1);
   assert.equal(play.start, 10);
   assert.equal(play.end, 29);
   assert.equal(play.rate, 1);
 
-  // 完成练习：暂停播放并回到片段列表，不再停留在练习面板
-  await harness.click("#practice-finish");
+  // 返回片段列表：暂停播放并回到列表
+  await harness.click("#practice-back");
   assert.equal(harness.tabMessages.some((message) => message.type === "PRACTICE_PAUSE"), true);
   assert.equal(harness.practiceSegmentCount(), 1);
 });
