@@ -20,3 +20,4 @@ host/vault-path.txt
 .DS_Store
 Thumbs.db
 *.log
+.workbuddy-ai/
