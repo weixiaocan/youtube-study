@@ -118,6 +118,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "OPEN_NOTE") {
+    nativeRequest({ action: "open_note", path: message.path }).then(sendResponse);
+    return true;
+  }
+
 });
 
 async function nativeRequest(payload) {

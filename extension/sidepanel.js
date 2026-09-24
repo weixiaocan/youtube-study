@@ -169,7 +169,10 @@ elements.draftNote.addEventListener("keydown", (event) => {
 });
 elements.loadTranscriptButton.addEventListener("click", requestTranscript);
 elements.loadTranscriptCta.addEventListener("click", requestTranscript);
-elements.saveToVaultButton.addEventListener("click", saveToVault);
+elements.saveToVaultButton.addEventListener("click", () => {
+  if (state?.sessionPath) return openNote();
+  return saveToVault();
+});
 elements.cleanCacheButton.addEventListener("click", cleanExpiredCache);
 elements.transcriptSearch.addEventListener("input", () => {
   transcriptFilter = elements.transcriptSearch.value.trim().toLowerCase();
@@ -245,8 +248,9 @@ async function renderState() {
   elements.transcriptCount.textContent = state.transcript.length;
   elements.saveStatus.className = `status-chip ${isSaved ? "saved" : hasTranscript ? "ready" : "idle"}`;
   elements.saveStatus.textContent = isSaved ? "已入库" : hasTranscript ? "待入库" : "未读取";
-  elements.saveToVaultButton.disabled = !hasTranscript || isSaved;
-  elements.saveToVaultButton.querySelector("span").textContent = isSaved ? "已保存到知识库" : "保存到知识库";
+  elements.saveToVaultButton.disabled = !hasTranscript;
+  elements.saveToVaultButton.querySelector("span").textContent = isSaved ? "打开笔记" : "保存到知识库";
+  elements.saveToVaultButton.classList.toggle("saved", isSaved);
   elements.transcriptEmpty.classList.toggle("hidden", hasTranscript);
   elements.transcriptToolbar.classList.toggle("hidden", !hasTranscript);
   elements.transcriptList.classList.toggle("hidden", !hasTranscript);
@@ -410,6 +414,16 @@ async function saveToVault() {
     showToast(error.message || "保存失败");
   } finally {
     elements.saveToVaultButton.classList.remove("loading");
+  }
+}
+
+async function openNote() {
+  if (!state?.sessionPath) return;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "OPEN_NOTE", path: state.sessionPath });
+    if (!result?.ok) throw new Error(result?.error || "打开失败");
+  } catch (error) {
+    showToast(error.message || "打开失败");
   }
 }
 

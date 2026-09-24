@@ -133,6 +133,14 @@ def handle(message: dict) -> dict:
             message.get("records") or [],
         )
         return {"ok": True, "sessionPath": str(note_path), "notePath": str(note_path)}
+    if action == "open_note":
+        path_value = message.get("path", "")
+        note_path = Path(path_value).resolve()
+        note_path.relative_to(VAULT.resolve())
+        if not note_path.is_file():
+            return {"ok": False, "error": "笔记文件不存在"}
+        os.startfile(str(note_path))
+        return {"ok": True}
     if action == "ping":
         return {"ok": True, "vault": str(VAULT)}
     raise ValueError("unsupported native action")
