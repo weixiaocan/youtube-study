@@ -15,10 +15,11 @@ from learning_service import (
     cache_cleanup_status,
     cleanup_uncommitted_cache,
     delete_unreferenced_screenshots,
-    download_thumbnail,
     fetch_transcript,
+    find_note_by_video_id,
     load_cached_records,
     load_cached_transcript,
+    load_metadata,
     save_study_note,
     store_screenshot,
     sync_records,
@@ -26,11 +27,6 @@ from learning_service import (
 
 
 class ManualSaveTest(unittest.TestCase):
-    def setUp(self) -> None:
-        # 测试不依赖外网：缩略图下载失败时笔记仍应正常保存。
-        self.thumbnail_patch = patch("learning_service.download_thumbnail", return_value=None)
-        self.thumbnail_patch.start()
-        self.addCleanup(self.thumbnail_patch.stop)
     def test_cache_cleanup_expires_only_unsaved_video_caches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
@@ -427,7 +423,7 @@ class ManualSaveTest(unittest.TestCase):
             existing, _ = fetch_transcript(vault, metadata)
             self.assertEqual(existing, saved)
 
-    def test_created_note_embeds_a_clickable_thumbnail_when_available(self) -> None:
+    def test_created_note_embeds_the_online_thumbnail_card(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
             video_id = "thumb1234"
@@ -443,58 +439,135 @@ class ManualSaveTest(unittest.TestCase):
                 cache / "transcript.json",
                 [{"id": 0, "start": 5.0, "duration": 2.0, "text": "Demo line."}],
             )
-            thumbnail_path = "原始材料/_附件/youtube-study/thumb1234/thumbnail.jpg"
 
-            with patch("learning_service.download_thumbnail", return_value=thumbnail_path):
-                note = save_study_note(vault, video_id, [{"timestamp": "0:05", "text": "Demo line."}])
+            note = save_study_note(vault, video_id, [{"timestamp": "0:05", "text": "Demo line."}])
 
             text = note.read_text(encoding="utf-8")
             self.assertIn(
-                f"[![Thumbnail lesson]({thumbnail_path})](https://www.youtube.com/watch?v={video_id})",
+                f"[![Thumbnail lesson](https://img.youtube.com/vi/{video_id}/hqdefault.jpg)]"
+                f"(https://www.youtube.com/watch?v={video_id})",
                 text,
             )
             self.assertIn("## 视频信息", text)
+            self.assertIn("- 频道：Example Creator", text)
+            # 在线卡片不在本地下载缩略图文件。
+            self.assertFalse((vault / ATTACHMENTS_REL / video_id / "thumbnail.jpg").exists())
 
-    def test_note_saves_without_thumbnail_when_download_fails(self) -> None:
+    def test_fetch_transcript_ignores_playlist_url_and_other_videos(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
-            video_id = "nothumb12"
-            cache = cache_dir(vault, video_id)
-            atomic_json(cache / "metadata.json", {
-                "videoId": video_id,
-                "title": "No thumbnail lesson",
-                "author": "Example Creator",
-                "url": f"https://www.youtube.com/watch?v={video_id}",
-            })
-            atomic_json(
-                cache / "transcript.json",
-                [{"id": 0, "start": 5.0, "duration": 2.0, "text": "Demo line."}],
-            )
+            video_id = "video456"
+            canonical = f"https://www.youtube.com/watch?v={video_id}"
+            commands = []
+
+            def fake_run(command, **_kwargs):
+                commands.append(command)
+                folder = Path(command[command.index("--output") + 1]).parent
+                # 即使临时目录里出现其他视频（语言优先级更高）的字幕，也不能被选中。
+                (folder / "other999.en.json3").write_text(
+                    '{"events":[{"tStartMs":0,"dDurationMs":1000,"segs":[{"utf8":"Wrong video"}]}]}',
+                    encoding="utf-8",
+                )
+                (folder / f"{video_id}.zh-Hans.json3").write_text(
+                    '{"events":[{"tStartMs":1000,"dDurationMs":2000,"segs":[{"utf8":"正确的视频"}]}]}',
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, "", "")
+
+            with patch("learning_service.shutil.which", return_value="yt-dlp"), patch(
+                "learning_service.run_yt_dlp",
+                side_effect=fake_run,
+            ):
+                _, transcript = fetch_transcript(vault, {
+                    "videoId": video_id,
+                    "title": "Playlist lesson",
+                    "author": "Example Creator",
+                    "url": f"{canonical}&list=PLexample&index=2&t=30s",
+                })
+
+            command = commands[0]
+            self.assertIn("--no-playlist", command)
+            self.assertEqual(command[-2:], ["--", canonical])
+            self.assertEqual(transcript[0]["text"], "正确的视频")
+            self.assertEqual(load_metadata(vault, video_id)["url"], canonical)
 
             note = save_study_note(vault, video_id, [])
-
             text = note.read_text(encoding="utf-8")
-            self.assertNotIn("[![", text)
-            self.assertIn("- 频道：Example Creator", text)
+            self.assertIn(f"- [0:01]({canonical}&t=1s) 正确的视频", text)
+            self.assertNotIn("list=", text)
 
-    def test_download_thumbnail_reuses_an_existing_file(self) -> None:
+    def _save_movable_note(self, vault: Path, video_id: str) -> Path:
+        cache = cache_dir(vault, video_id)
+        atomic_json(cache / "metadata.json", {
+            "videoId": video_id,
+            "title": "Movable lesson",
+            "author": "Example Creator",
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "createdAt": "2026-08-29T00:00:00+00:00",
+        })
+        atomic_json(
+            cache / "transcript.json",
+            [{"id": 0, "start": 3.0, "duration": 2.0, "text": "Move me."}],
+        )
+        return save_study_note(
+            vault,
+            video_id,
+            [{"timestamp": "0:03", "time": 3, "text": "Move me.", "note": "first note"}],
+        )
+
+    def test_moved_note_is_found_by_video_id_and_metadata_is_repaired(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
-            destination = vault / ATTACHMENTS_REL / "thumb9999" / "thumbnail.jpg"
-            destination.parent.mkdir(parents=True)
-            destination.write_bytes(b"already-here")
+            video_id = "moved123"
+            original = self._save_movable_note(vault, video_id)
+            content = original.read_text(encoding="utf-8")
+            decoys = [
+                vault / ".claudian" / "migrations" / "backup" / "copy.md",
+                vault / "归档" / "migrations" / "copy.md",
+                vault / ".trash" / "copy.md",
+                vault / ".obsidian" / "copy.md",
+            ]
+            for decoy in decoys:
+                decoy.parent.mkdir(parents=True, exist_ok=True)
+                decoy.write_text(content, encoding="utf-8")
+            moved = vault / "Wiki" / "主题" / "Renamed lesson.md"
+            moved.parent.mkdir(parents=True)
+            original.replace(moved)
 
-            result = download_thumbnail(vault, "thumb9999")
+            self.assertEqual(find_note_by_video_id(vault, video_id).resolve(), moved.resolve())
+            self.assertIsNone(find_note_by_video_id(vault, "absent99"))
 
-            self.assertEqual(result, "原始材料/_附件/youtube-study/thumb9999/thumbnail.jpg")
+            note = sync_records(
+                vault,
+                video_id,
+                [{"timestamp": "0:03", "time": 3, "text": "Move me.", "note": "second note"}],
+            )
 
-    def test_download_thumbnail_fails_silently_offline(self) -> None:
+            self.assertEqual(note.resolve(), moved.resolve())
+            self.assertFalse(original.exists())
+            self.assertIn("second note", moved.read_text(encoding="utf-8"))
+            self.assertEqual(load_metadata(vault, video_id)["notePath"], "Wiki/主题/Renamed lesson.md")
+            restored_note, _ = load_cached_transcript(vault, video_id)
+            self.assertEqual(restored_note.resolve(), moved.resolve())
+            for decoy in decoys:
+                self.assertIn("first note", decoy.read_text(encoding="utf-8"))
+                self.assertNotIn("second note", decoy.read_text(encoding="utf-8"))
+
+    def test_deleted_note_reports_that_it_was_moved_or_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
             vault = Path(temp_name)
-            with patch("learning_service.urllib.request.build_opener", side_effect=OSError("offline")):
-                result = download_thumbnail(vault, "thumb0000")
-            self.assertIsNone(result)
+            video_id = "gone1234"
+            original = self._save_movable_note(vault, video_id)
+            original.unlink()
 
+            with self.assertRaises(RuntimeError) as caught:
+                sync_records(vault, video_id, [])
+
+            self.assertIn("已被移走或删除", str(caught.exception))
+            self.assertIn(video_id, str(caught.exception))
+            note_path, transcript = load_cached_transcript(vault, video_id)
+            self.assertIsNone(note_path)
+            self.assertTrue(transcript)
 
 if __name__ == "__main__":
     unittest.main()

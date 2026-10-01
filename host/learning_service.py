@@ -18,7 +18,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -32,6 +31,8 @@ RECORDS_END = "<!-- youtube-study:records:end -->"
 TRANSCRIPT_START = "<!-- youtube-study:transcript:start -->"
 TRANSCRIPT_END = "<!-- youtube-study:transcript:end -->"
 SCREENSHOT_ID = re.compile(r"[0-9]{10}-[a-f0-9]{10}\.(?:jpg|png|webp)")
+# find_note_by_video_id() 扫描笔记时跳过的目录：工具/缓存、Obsidian 配置、Git、回收站，以及迁移备份。
+NOTE_SCAN_SKIP_DIRS = {".claudian", ".obsidian", ".git", ".trash", "migrations"}
 
 
 def safe_filename(value: str, limit: int = 96) -> str:
@@ -44,6 +45,11 @@ def validate_video_id(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", value or ""):
         raise ValueError("invalid video id")
     return value
+
+
+def watch_url(video_id: str) -> str:
+    """Canonical watch URL; never reuse the page URL (it may carry list/index/t)."""
+    return f"https://www.youtube.com/watch?v={validate_video_id(video_id)}"
 
 
 def atomic_text(path: Path, value: str) -> None:
@@ -218,7 +224,8 @@ def format_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-def transcript_markdown(transcript: list[dict], url: str) -> str:
+def transcript_markdown(transcript: list[dict], video_id: str) -> str:
+    url = watch_url(video_id)
     lines = []
     for item in transcript:
         seconds = float(item.get("start") or 0)
@@ -385,8 +392,8 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
             if not re.search(rf"(?m)^video_id:\s*{re.escape(expected_video_id)}\s*$", suffixed_text):
                 raise RuntimeError("同名笔记路径已被其他视频占用")
             return note
-    url = metadata["url"]
     video_id = metadata["videoId"]
+    url = watch_url(video_id)
     thumb_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
     alt = re.sub(r"[\[\]]", "", title)
     video_info = [
@@ -427,12 +434,62 @@ def create_note(vault: Path, metadata: dict, transcript: list[dict]) -> Path:
         "## 完整字幕",
         "",
         TRANSCRIPT_START,
-        transcript_markdown(transcript, url),
+        transcript_markdown(transcript, video_id),
         TRANSCRIPT_END,
         "",
     ])
     atomic_text(note, content)
     return note
+
+
+def read_frontmatter(path: Path, limit: int = 16384) -> str:
+    """Return the YAML frontmatter body of a Markdown file, or "" when absent."""
+    try:
+        with path.open(encoding="utf-8-sig", errors="replace") as handle:
+            head = handle.read(limit)
+    except OSError:
+        return ""
+    match = re.match(r"---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)", head, re.S)
+    return match.group(1) if match else ""
+
+
+def find_note_by_video_id(vault: Path, video_id: str) -> Path | None:
+    """Locate a note by its frontmatter video_id (e.g. after it was moved or renamed in Obsidian).
+
+    Skips .claudian / .obsidian / .git / .trash and migration backups. When several notes
+    match, a note inside the default YouTube notes folder wins, then the first by path.
+    """
+    video_id = validate_video_id(video_id)
+    pattern = re.compile(rf"""(?m)^video_id:[ \t]*["']?{re.escape(video_id)}["']?[ \t]*$""")
+    matches: list[Path] = []
+    for root, dirs, files in os.walk(vault):
+        dirs[:] = sorted(name for name in dirs if name.lower() not in NOTE_SCAN_SKIP_DIRS)
+        for name in sorted(files):
+            if not name.lower().endswith(".md"):
+                continue
+            path = Path(root) / name
+            if pattern.search(read_frontmatter(path)):
+                matches.append(path)
+    if not matches:
+        return None
+    preferred = (vault / NOTES_REL).resolve()
+    matches.sort(key=lambda path: (not path.resolve().is_relative_to(preferred), str(path)))
+    return matches[0]
+
+
+def relocate_note(vault: Path, metadata: dict) -> Path | None:
+    """Recover a note whose notePath went stale and write the new path back to metadata."""
+    try:
+        video_id = validate_video_id(str(metadata.get("videoId") or ""))
+    except ValueError:
+        return None
+    found = find_note_by_video_id(vault, video_id)
+    if not found:
+        return None
+    found = found.resolve()
+    metadata["notePath"] = found.relative_to(vault.resolve()).as_posix()
+    atomic_json(cache_dir(vault, video_id) / "metadata.json", metadata)
+    return found
 
 
 def existing_note(vault: Path, metadata: dict | None) -> Path | None:
@@ -441,8 +498,11 @@ def existing_note(vault: Path, metadata: dict | None) -> Path | None:
     try:
         note = note_from_metadata(vault, metadata)
     except RuntimeError:
-        return None
-    return note if note.exists() else None
+        note = None
+    if note is not None and note.exists():
+        return note
+    # notePath 失效：笔记可能在 Obsidian 中被移动或改名，按 frontmatter 的 video_id 找回。
+    return relocate_note(vault, metadata)
 
 
 def load_cached_transcript(vault: Path, video_id: str) -> tuple[Path | None, list[dict]]:
@@ -508,44 +568,6 @@ def system_proxy() -> str | None:
     return server if "://" in server else f"http://{server}"
 
 
-def download_thumbnail(vault: Path, video_id: str) -> str | None:
-    """Download the video thumbnail beside its screenshots.
-
-    Returns the vault-relative POSIX path usable in an Obsidian image embed,
-    or None when the download fails. Failures are silent: the note must still
-    be saved even if the thumbnail cannot be fetched (e.g. offline).
-    """
-    try:
-        video_id = validate_video_id(video_id)
-    except ValueError:
-        return None
-    destination = vault / ATTACHMENTS_REL / video_id / "thumbnail.jpg"
-    if destination.exists():
-        return destination.relative_to(vault).as_posix()
-    proxy = system_proxy()
-    proxy_handler = (
-        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        if proxy
-        else urllib.request.ProxyHandler({})
-    )
-    request = urllib.request.Request(
-        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
-        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-    )
-    try:
-        with urllib.request.build_opener(proxy_handler).open(request, timeout=10) as response:
-            payload = response.read()
-    except (OSError, ValueError):
-        return None
-    if not payload or len(payload) < 1024:
-        return None
-    try:
-        atomic_bytes(destination, payload)
-    except OSError:
-        return None
-    return destination.relative_to(vault).as_posix()
-
-
 def yt_dlp_proxy_args() -> list[str]:
     """Build --proxy arguments for yt-dlp.
 
@@ -608,7 +630,8 @@ def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]
     yt_dlp = shutil.which("yt-dlp")
     if not yt_dlp:
         raise RuntimeError("未找到 yt-dlp，请先安装或加入 PATH")
-    url = video.get("url") or f"https://www.youtube.com/watch?v={video_id}"
+    # 始终使用标准地址：页面 URL 可能带 list/index，会让 yt-dlp 去处理整个播放列表。
+    url = watch_url(video_id)
     proxy_args = yt_dlp_proxy_args()
     with tempfile.TemporaryDirectory(prefix="youtube-study-") as temp_name:
         output = str(Path(temp_name) / "%(id)s.%(ext)s")
@@ -617,11 +640,11 @@ def fetch_transcript(vault: Path, video: dict) -> tuple[Path | None, list[dict]]
         command = [
             yt_dlp, "--no-warnings", "--skip-download", "--write-subs", "--write-auto-subs",
             "--sub-langs", "en-orig,en,zh-Hans,zh-Hant,zh", "--sub-format", "json3",
-            "--socket-timeout", "20", "--retries", "3",
-            *proxy_args, "--output", output, url,
+            "--socket-timeout", "20", "--retries", "3", "--no-playlist",
+            *proxy_args, "--output", output, "--", url,
         ]
         completed = run_yt_dlp(command, timeout=120)
-        candidates = sorted(Path(temp_name).glob("*.json3"), key=subtitle_priority)
+        candidates = sorted(Path(temp_name).glob(f"{video_id}.*.json3"), key=subtitle_priority)
         if completed.returncode != 0 and not candidates:
             # 单个语言被限流（HTTP 429）时 yt-dlp 会以非零退出码结束；
             # 但只要已生成可用的字幕文件，就使用已下载的部分而不是整体报错。
@@ -669,12 +692,17 @@ def save_study_note(vault: Path, video_id: str, records: list[dict]) -> Path:
 
 
 def sync_records(vault: Path, video_id: str, records: list[dict]) -> Path:
-    metadata = load_metadata(vault, validate_video_id(video_id))
-    if not metadata:
+    video_id = validate_video_id(video_id)
+    metadata = load_metadata(vault, video_id)
+    if not metadata or not metadata.get("notePath"):
         raise RuntimeError("尚未保存当前视频，请先保存到知识库")
-    note = note_from_metadata(vault, metadata)
-    if not note.exists():
-        raise RuntimeError("当前视频笔记不存在，请重新获取字幕")
+    note = existing_note(vault, metadata)
+    if note is None:
+        raise RuntimeError(
+            f"笔记已被移走或删除：原路径「{metadata.get('notePath')}」不存在，"
+            f"库中也找不到 video_id 为 {video_id} 的笔记。"
+            "如需重新创建，请在侧栏点击「保存到知识库」。"
+        )
     atomic_json(cache_dir(vault, video_id) / "records.json", records)
     screenshot_paths = materialize_record_screenshots(vault, video_id, records)
     text = note.read_text(encoding="utf-8")

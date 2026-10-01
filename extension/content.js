@@ -74,7 +74,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "LOAD_TRANSCRIPT") {
-    const requestedVideo = videoInfo ? { ...videoInfo, url: location.href } : null;
+    const requestedVideo = videoInfo ? { ...videoInfo, url: watchUrl(videoInfo.videoId) } : null;
     loadStudyTranscript(requestedVideo).then((result) => {
       if (!requestedVideo || videoInfo?.videoId !== requestedVideo.videoId) {
         sendResponse({ ok: false, error: "视频已切换，请重新获取字幕" });
@@ -231,7 +231,7 @@ function captureMoment() {
     videoId: videoInfo.videoId,
     title: videoInfo.title,
     author: videoInfo.author,
-    url: location.href,
+    url: watchUrl(videoInfo.videoId),
     time,
     timestamp: formatTime(time),
     text: segment.text,
@@ -291,6 +291,11 @@ function buildState() {
 
 function notifyState() {
   chrome.runtime.sendMessage({ type: "VIDEO_STATE_READY", state: buildState() }).catch(() => {});
+}
+
+// 只传标准观看地址：location.href 可能带 list/index/t 等参数，会让 yt-dlp 处理整个播放列表。
+function watchUrl(videoId) {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
 function formatTime(seconds) {
